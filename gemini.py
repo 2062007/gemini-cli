@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gemini CLI Chatbot - Đơn giản, gọn nhẹ, dùng requests
-Hỗ trợ chọn model Gemini theo tài liệu chính thức của Google.
+Hỗ trợ model alias gemini-flash-latest của Google.
 """
 
 import os
@@ -13,9 +13,11 @@ from pathlib import Path
 try:
     import requests
     from colorama import init, Fore, Style, Back
+    from tabulate import tabulate
     init(autoreset=True)
-except ImportError:
-    print("Cài đặt thư viện: pip install requests colorama")
+except ImportError as e:
+    print(f"Thiếu thư viện: {e}")
+    print("Cài đặt: pip install requests colorama tabulate")
     sys.exit(1)
 
 # ==================== CẤU HÌNH ====================
@@ -28,14 +30,12 @@ HISTORY_FILE = CONFIG_DIR / "history.json"
 # --- Danh sách các model text (dựa theo tài liệu Google) ---
 # Định dạng: "Tên hiển thị": "model_id"
 AVAILABLE_MODELS = {
-    "1": {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "desc": "Cân bằng hiệu năng và tốc độ, suy luận tốt."},
-    "2": {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "desc": "Mạnh mẽ nhất, dành cho tác vụ phức tạp và lập trình."},
-    "3": {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "desc": "Nhanh, cửa sổ ngữ cảnh 1 triệu token."},
-    "4": {"id": "gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash-Lite", "desc": "Nhanh nhất, tối ưu chi phí và độ trễ thấp."},
-    "5": {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite", "desc": "Tiết kiệm chi phí nhất, cho tác vụ tần suất cao."},
-    "6": {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "desc": "Phiên bản xem trước mới nhất, hiệu suất cải thiện."},
+    "1": {"id": "gemini-flash-latest", "name": "Gemini Flash Latest", "desc": "Model alias tự động cập nhật phiên bản Flash mới nhất."},
+    "2": {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite", "desc": "Tiết kiệm chi phí nhất, cho tác vụ tần suất cao."},
+    "3": {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "desc": "Phiên bản xem trước mới nhất, hiệu suất cải thiện."},
+    "4": {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "desc": "Mạnh mẽ nhất, dành cho tác vụ phức tạp và lập trình."},
 }
-DEFAULT_MODEL_ID = "gemini-2.5-flash"
+DEFAULT_MODEL_ID = "gemini-flash-latest"  # LUÔN DÙNG ALIAS NÀY
 
 # ==================== KHỞI TẠO THƯ MỤC ====================
 def init_dirs():
@@ -87,10 +87,12 @@ def choose_model():
             break
     print(f"{Fore.YELLOW}Model hiện tại: {Fore.GREEN}{current_name}{Style.RESET_ALL}\n")
     
-    # Hiển thị danh sách model
+    # Hiển thị danh sách model dạng bảng đẹp
+    table = []
     for key, model in AVAILABLE_MODELS.items():
-        print(f"{Fore.GREEN}{key}. {Fore.WHITE}{model['name']}")
-        print(f"   {Fore.BLUE}{model['desc']}{Style.RESET_ALL}")
+        marker = "✅ " if model["id"] == current_model_id else "   "
+        table.append([f"{marker}{key}", model["name"], model["desc"]])
+    print(tabulate(table, headers=["Chọn", "Model", "Mô tả"], tablefmt="rounded_grid"))
     
     choice = input(f"\n{Fore.GREEN}Nhập số để đổi model (Enter để giữ nguyên): {Style.RESET_ALL}").strip()
     
@@ -204,7 +206,6 @@ def call_gemini(api_key, messages, model_id):
         response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
             result = response.json()
-            # Xử lý trường hợp response có thể có nhiều candidate
             if result.get("candidates"):
                 return result["candidates"][0]["content"]["parts"][0]["text"]
             else:
