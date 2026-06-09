@@ -165,7 +165,7 @@ TEXTS = {
 }
 
 # Biến toàn cục lưu ngôn ngữ hiện tại
-CURRENT_LANG = "vi"  # mặc định
+CURRENT_LANG = "vi"  # mặc định, sẽ được ghi đè ngay khi khởi động
 
 def get_text(key: str) -> str:
     """Lấy chuỗi theo ngôn ngữ hiện tại."""
@@ -178,7 +178,8 @@ def init_dirs():
     if not HISTORY_FILE.exists():
         HISTORY_FILE.write_text(json.dumps([], indent=2))
     if not CONFIG_FILE.exists():
-        save_config({"api_key": "", "current_chat": "default", "model": DEFAULT_MODEL_ID, "language": "vi"})
+        # Tạo config mặc định, language sẽ được cập nhật sau
+        save_config({"api_key": "", "current_chat": "default", "model": DEFAULT_MODEL_ID, "language": CURRENT_LANG})
     print(f"{Fore.BLUE}{get_text('data_dir').format(CONFIG_DIR)}{Style.RESET_ALL}")
 
 def load_config():
@@ -187,24 +188,19 @@ def load_config():
 def save_config(config):
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
 
-# ==================== CHỌN NGÔN NGỮ ====================
-def choose_language():
+# ==================== CHỌN NGÔN NGỮ (CHẠY ĐẦU TIÊN) ====================
+def initial_language_prompt():
+    """
+    Hiển thị lời nhắc chọn ngôn ngữ ngay khi bắt đầu, trước mọi thao tác khác.
+    Không sử dụng get_text() để tránh phụ thuộc vào CURRENT_LANG chưa được thiết lập.
+    """
     global CURRENT_LANG
-    config = load_config()
-    if config.get("language"):
-        CURRENT_LANG = config["language"]
-        return
     print("\n" + "="*60)
     print("🌐 Select language / Chọn ngôn ngữ:")
     print("1. English")
     print("2. Tiếng Việt")
     choice = input("Your choice / Lựa chọn của bạn (1/2): ").strip()
-    if choice == "1":
-        CURRENT_LANG = "en"
-    else:
-        CURRENT_LANG = "vi"
-    config["language"] = CURRENT_LANG
-    save_config(config)
+    CURRENT_LANG = "en" if choice == "1" else "vi"
     print(f"{Fore.GREEN}✅ Language set to {CURRENT_LANG.upper()}{Style.RESET_ALL}")
 
 # ==================== QUẢN LÝ API KEY ====================
@@ -503,13 +499,20 @@ def chat_loop(chat_name, api_key, model_id):
 
 # ==================== MAIN MENU ====================
 def main_menu():
+    # 1. Hỏi ngôn ngữ ngay từ đầu, trước mọi thứ khác
+    initial_language_prompt()
+    
+    # 2. Sau khi có ngôn ngữ, khởi tạo thư mục và cập nhật config
     init_dirs()
-    choose_language()
+    config = load_config()
+    config["language"] = CURRENT_LANG
+    save_config(config)
+    
+    # 3. Lấy API key (nếu cần nhập, thông báo đã đúng ngôn ngữ)
     api_key = get_api_key()
     if not api_key:
         return
     
-    config = load_config()
     current_model = config.get("model", DEFAULT_MODEL_ID)
     current_chat = config.get("current_chat", "default")
     
