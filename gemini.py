@@ -135,7 +135,7 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Invalid choice, keeping current language.",
-        "thinking": "🤔 Thinking...",
+        "thinking": "Thinking...",
         # Code
         "code_help": "Usage: /code <language> <description>\nExample: /code python Calculate factorial of 5",
         "code_generating": "📝 Generating {} code for: {}...",
@@ -223,7 +223,7 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
-        "thinking": "🤔 Đang suy nghĩ...",
+        "thinking": "Đang suy nghĩ...",
         # Code
         "code_help": "Cách dùng:\n  /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
         "code_generating": "📝 Đang tạo code {} cho yêu cầu: {}...",
