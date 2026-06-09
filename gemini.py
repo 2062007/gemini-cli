@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gemini CLI Chatbot - Extended with Unlimited Language Code Generation & Execution
+Gemini CLI Chatbot - Unlimited Language Code Generation & Execution
 """
 
 import json
@@ -9,6 +9,8 @@ import time
 import threading
 import itertools
 import subprocess
+import tempfile
+import os
 import shutil
 import re
 from datetime import datetime
@@ -27,20 +29,19 @@ CONFIG_FILE = DATA_DIR / "config.json"
 CHATS_DIR = DATA_DIR / "chats"
 HISTORY_FILE = DATA_DIR / "history.json"
 MODEL_CACHE_FILE = DATA_DIR / "model_cache.json"
-CODE_DIR = DATA_DIR / "generated_code"         # thư mục lưu code
-CODE_INDEX_FILE = CODE_DIR / "index.json"      # danh sách metadata
 
 DEFAULT_MODEL_ID = "gemini-2.0-flash"
 
 # ==================== CẤU HÌNH RUNTIME MỞ RỘNG ====================
-# Hỗ trợ gần như mọi ngôn ngữ. Nếu không có trong danh sách, có thể thử đoán.
 LANGUAGE_RUNTIMES = {
     "python": {"ext": "py", "run": ["python3", "{file}"]},
+    "python3": {"ext": "py", "run": ["python3", "{file}"]},
     "javascript": {"ext": "js", "run": ["node", "{file}"]},
     "js": {"ext": "js", "run": ["node", "{file}"]},
+    "node": {"ext": "js", "run": ["node", "{file}"]},
+    "typescript": {"ext": "ts", "compile": ["tsc", "{file}"], "run": ["node", "{jsfile}"]},
+    "ts": {"ext": "ts", "compile": ["tsc", "{file}"], "run": ["node", "{jsfile}"]},
     "ruby": {"ext": "rb", "run": ["ruby", "{file}"]},
-    "bash": {"ext": "sh", "run": ["bash", "{file}"]},
-    "sh": {"ext": "sh", "run": ["bash", "{file}"]},
     "php": {"ext": "php", "run": ["php", "{file}"]},
     "perl": {"ext": "pl", "run": ["perl", "{file}"]},
     "r": {"ext": "r", "run": ["Rscript", "{file}"]},
@@ -52,9 +53,14 @@ LANGUAGE_RUNTIMES = {
     "java": {"ext": "java", "compile": ["javac", "{file}"], "run": ["java", "{classname}"]},
     "kotlin": {"ext": "kt", "compile": ["kotlinc", "{file}", "-include-runtime", "-d", "{jar}"], "run": ["java", "-jar", "{jar}"]},
     "swift": {"ext": "swift", "run": ["swift", "{file}"]},
-    "typescript": {"ext": "ts", "compile": ["tsc", "{file}"], "run": ["node", "{jsfile}"]},
     "lua": {"ext": "lua", "run": ["lua", "{file}"]},
     "scala": {"ext": "scala", "compile": ["scalac", "{file}"], "run": ["scala", "{classname}"]},
+    "bash": {"ext": "sh", "run": ["bash", "{file}"]},
+    "sh": {"ext": "sh", "run": ["bash", "{file}"]},
+    "shell": {"ext": "sh", "run": ["bash", "{file}"]},
+    "powershell": {"ext": "ps1", "run": ["pwsh", "-File", "{file}"]},
+    "ps1": {"ext": "ps1", "run": ["pwsh", "-File", "{file}"]},
+    "sqlite": {"ext": "sql", "run": ["sqlite3", "{file}"]},
     # Thêm tuỳ ý...
 }
 
@@ -130,30 +136,23 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Invalid choice, keeping current language.",
-        "thinking": "Thinking...",
-        # Code management keys
-        "code_help": "Usage:\n  /code <language> <description>   Generate new code\n  /code list                       List saved codes\n  /code show <name>                Show code content\n  /code run <name>                 Run saved code\n  /code delete <name>             Delete saved code",
+        "thinking": "🤔 Thinking...",
+        # Code
+        "code_help": "Usage: /code <language> <description>\nExample: /code python Calculate factorial of 5",
         "code_generating": "📝 Generating {} code for: {}...",
         "code_generated": "✅ Generated code:",
         "code_run_prompt": "Run this code? (y/N): ",
         "code_running": "🚀 Running...",
         "code_output": "📤 Output:",
-        "code_error": "❌ Error:",
         "code_not_found": "❌ No code block found in response.",
-        "code_unsupported_runtime": "❌ No runtime configuration for '{}'. Supported: {}. You can add it to LANGUAGE_RUNTIMES.",
+        "code_unsupported_runtime": "❌ No runtime configuration for '{}'. You can add it to LANGUAGE_RUNTIMES or install the required tool.",
         "code_runtime_missing": "⚠️  '{}' is not installed. Please install it to run {} code.",
-        "code_save_prompt": "Save this code? (y/N): ",
-        "code_name_prompt": "Name for this code (Enter = auto): ",
-        "code_saved": "💾 Code saved as '{}' (file: {})",
-        "code_name_exists": "⚠️  A code named '{}' already exists. Overwrite? (y/N): ",
-        "code_index_title": "📁 SAVED CODES",
-        "code_list_empty": "No saved codes.",
-        "code_show_title": "📄 Code: {}",
-        "code_delete_confirm": "⚠️  Delete code '{}'? (y/N): ",
-        "code_deleted": "✅ Deleted '{}'",
-        "code_run_not_found": "❌ No saved code named '{}'",
         "code_exec_failed": "❌ Execution failed (exit code {})",
         "code_timed_out": "❌ Execution timed out ({}s)",
+        "code_save_prompt": "Save this code? (y/N): ",
+        "code_name_prompt": "Name for this code (Enter = auto): ",
+        "code_saved": "💾 Code saved as '{}'",
+        "code_name_exists": "⚠️  A code named '{}' already exists. Overwrite? (y/N): ",
     },
     "vi": {
         "data_dir": "📁 Dữ liệu lưu tại: {}",
@@ -225,30 +224,23 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
-        "thinking": "Đang suy nghĩ...",
-        # Code management keys (Vietnamese)
-        "code_help": "Cách dùng:\n  /code <ngôn ngữ> <mô tả>       Tạo code mới\n  /code list                      Liệt kê code đã lưu\n  /code show <tên>                Xem nội dung code\n  /code run <tên>                 Chạy code đã lưu\n  /code delete <tên>              Xoá code đã lưu",
+        "thinking": "🤔 Đang suy nghĩ...",
+        # Code
+        "code_help": "Cách dùng: /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
         "code_generating": "📝 Đang tạo code {} cho yêu cầu: {}...",
         "code_generated": "✅ Code đã tạo:",
         "code_run_prompt": "Chạy đoạn code này? (y/N): ",
         "code_running": "🚀 Đang chạy...",
         "code_output": "📤 Kết quả:",
-        "code_error": "❌ Lỗi:",
         "code_not_found": "❌ Không tìm thấy khối code trong phản hồi.",
-        "code_unsupported_runtime": "❌ Chưa có cấu hình runtime cho '{}'. Hỗ trợ: {}. Bạn có thể thêm vào LANGUAGE_RUNTIMES.",
+        "code_unsupported_runtime": "❌ Chưa có cấu hình runtime cho '{}'. Bạn có thể thêm vào LANGUAGE_RUNTIMES hoặc cài đặt công cụ cần thiết.",
         "code_runtime_missing": "⚠️  '{}' chưa được cài đặt. Hãy cài đặt để chạy code {}.",
-        "code_save_prompt": "Lưu code này? (y/N): ",
-        "code_name_prompt": "Tên cho code này (Enter = tự đặt): ",
-        "code_saved": "💾 Đã lưu code với tên '{}' (file: {})",
-        "code_name_exists": "⚠️  Code tên '{}' đã tồn tại. Ghi đè? (y/N): ",
-        "code_index_title": "📁 CODE ĐÃ LƯU",
-        "code_list_empty": "Chưa có code nào được lưu.",
-        "code_show_title": "📄 Code: {}",
-        "code_delete_confirm": "⚠️  Xoá code '{}'? (y/N): ",
-        "code_deleted": "✅ Đã xoá '{}'",
-        "code_run_not_found": "❌ Không tìm thấy code đã lưu tên '{}'",
         "code_exec_failed": "❌ Thực thi thất bại (mã lỗi {})",
         "code_timed_out": "❌ Thực thi quá thời gian ({}s)",
+        "code_save_prompt": "Lưu code này? (y/N): ",
+        "code_name_prompt": "Tên cho code này (Enter = tự đặt): ",
+        "code_saved": "💾 Đã lưu code với tên '{}'",
+        "code_name_exists": "⚠️  Code tên '{}' đã tồn tại. Ghi đè? (y/N): ",
     }
 }
 
@@ -282,11 +274,8 @@ class GeminiChatbot:
 
         DATA_DIR.mkdir(exist_ok=True)
         CHATS_DIR.mkdir(exist_ok=True)
-        CODE_DIR.mkdir(exist_ok=True)
         if not HISTORY_FILE.exists():
             HISTORY_FILE.write_text(json.dumps([], indent=2), encoding="utf-8")
-        if not CODE_INDEX_FILE.exists():
-            CODE_INDEX_FILE.write_text(json.dumps([], indent=2), encoding="utf-8")
 
     def t(self, key: str, *args) -> str:
         text = TEXTS.get(self.lang, TEXTS["vi"]).get(key, key)
@@ -354,7 +343,6 @@ class GeminiChatbot:
                 return self.get_api_key()
         return self.api_key
 
-    # ==================== MODEL MANAGEMENT ====================
     def fetch_models_from_api(self) -> Optional[Dict[str, Dict]]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
         print(f"{Fore.CYAN}{self.t('fetching_models')}{Style.RESET_ALL}")
@@ -450,7 +438,6 @@ class GeminiChatbot:
         elif choice != "":
             print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
 
-    # ==================== CHAT & HISTORY ====================
     def _chat_file_path(self, chat_name: str) -> Path:
         safe_name = "".join(c for c in chat_name if c.isalnum() or c in "._-")
         if not safe_name:
@@ -571,7 +558,87 @@ class GeminiChatbot:
             t.join()
             return f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
-    # ==================== CODE GENERATION & EXECUTION ====================
+    # ==================== CODE: KHÔNG GIỚI HẠN NGÔN NGỮ ====================
+    def get_language_runtime(self, lang: str) -> Optional[dict]:
+        """Trả về cấu hình runtime cho ngôn ngữ (có thể fallback)."""
+        lang = lang.lower().strip()
+        if lang in LANGUAGE_RUNTIMES:
+            return LANGUAGE_RUNTIMES[lang]
+        # Đoán một số tên phổ biến
+        if lang in ("c++", "cpp"):
+            return LANGUAGE_RUNTIMES.get("cpp")
+        if lang.startswith("python"):
+            return LANGUAGE_RUNTIMES.get("python")
+        if lang in ("js", "node", "javascript"):
+            return LANGUAGE_RUNTIMES.get("javascript")
+        if lang in ("sh", "bash", "shell"):
+            return LANGUAGE_RUNTIMES.get("bash")
+        if lang in ("ps", "pwsh", "powershell"):
+            return LANGUAGE_RUNTIMES.get("powershell")
+        if lang in ("ts", "typescript"):
+            return LANGUAGE_RUNTIMES.get("typescript")
+        # Fallback: thử dùng chính tên ngôn ngữ làm runtime với file mở rộng là tên ngôn ngữ
+        return {"ext": lang, "run": [lang, "{file}"]}
+
+    def run_code(self, language: str, code: str, timeout=30) -> str:
+        """Thực thi code bằng file tạm, hỗ trợ biên dịch nếu cần."""
+        rt = self.get_language_runtime(language)
+        if not rt:
+            return self.t("code_unsupported_runtime", language)
+        ext = rt.get("ext", language)
+        compile_cmd = rt.get("compile")
+        run_cmd = rt.get("run")
+        if not run_cmd:
+            return "❌ No run command defined."
+        runtime_exe = run_cmd[0]
+        # Kiểm tra runtime có tồn tại
+        if not shutil.which(runtime_exe):
+            return self.t("code_runtime_missing", runtime_exe, language)
+
+        with tempfile.TemporaryDirectory(prefix="gemini_code_") as tmp_dir:
+            file_path = os.path.join(tmp_dir, f"code.{ext}")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            try:
+                exe_path = None
+                # Biên dịch nếu có
+                if compile_cmd:
+                    if ext in ("java", "scala", "kotlin"):
+                        exe_path = file_path
+                    else:
+                        exe_path = os.path.join(tmp_dir, "program")
+                        if os.name == "nt":
+                            exe_path += ".exe"
+                    compile_cmd_filled = [arg.replace("{file}", file_path).replace("{exe}", exe_path) for arg in compile_cmd]
+                    comp = subprocess.run(compile_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
+                    if comp.returncode != 0:
+                        return f"❌ Compilation failed:\n{comp.stderr}"
+                # Chạy
+                run_cmd_filled = []
+                for arg in run_cmd:
+                    arg = arg.replace("{file}", file_path)
+                    if exe_path:
+                        arg = arg.replace("{exe}", exe_path)
+                    if "{jsfile}" in arg:
+                        jsfile = os.path.splitext(file_path)[0] + ".js"
+                        arg = arg.replace("{jsfile}", jsfile)
+                    if "{classname}" in arg:
+                        classname = Path(file_path).stem
+                        arg = arg.replace("{classname}", classname)
+                    if "{jar}" in arg:
+                        jar = os.path.splitext(file_path)[0] + ".jar"
+                        arg = arg.replace("{jar}", jar)
+                    run_cmd_filled.append(arg)
+                proc = subprocess.run(run_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
+                out = proc.stdout
+                if proc.stderr:
+                    out += f"\n{Fore.RED}STDERR:\n{proc.stderr}{Style.RESET_ALL}"
+                if proc.returncode != 0:
+                    out = self.t("code_exec_failed", proc.returncode) + "\n" + out
+                return out.strip() or "(no output)"
+            except subprocess.TimeoutExpired:
+                return self.t("code_timed_out", timeout)
+
     def extract_code_from_response(self, text: str) -> Optional[str]:
         pattern = r"```(?:\w+)?\n(.*?)```"
         matches = re.findall(pattern, text, re.DOTALL)
@@ -579,222 +646,69 @@ class GeminiChatbot:
             return "\n".join(matches)
         return text.strip()
 
-    def get_language_runtime(self, lang: str) -> Optional[dict]:
-        lang = lang.lower().strip()
-        if lang in LANGUAGE_RUNTIMES:
-            return LANGUAGE_RUNTIMES[lang]
-        # tự động đoán nếu không có
-        guess_ext = lang  # nhiều trường hợp tên ngôn ngữ trùng extension
-        if lang in ("c++", "cpp"):
-            return LANGUAGE_RUNTIMES["cpp"]
-        # Thử kiểm tra xem có runtime với tên đó không (như python3 -> python)
-        if lang.startswith("python"):
-            return LANGUAGE_RUNTIMES["python"]
-        if lang in ("js", "javascript", "node"):
-            return LANGUAGE_RUNTIMES["javascript"]
-        if lang in ("sh", "bash", "shell"):
-            return LANGUAGE_RUNTIMES["bash"]
-        # fallback: tạo cấu hình đơn giản dùng file với extension = lang
-        return {"ext": lang, "run": [lang, "{file}"]}  # risky
+    def handle_code_command(self, args: str):
+        """Xử lý lệnh /code <ngôn ngữ> <mô tả> - không giới hạn ngôn ngữ."""
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            print(f"{Fore.YELLOW}{self.t('code_help')}{Style.RESET_ALL}")
+            return
+        language = parts[0].lower()
+        description = parts[1]
 
-    def run_code(self, language: str, code: str, timeout=30) -> str:
-        """Thực thi code với file tạm, hỗ trợ biên dịch nếu cần. Trả về output."""
-        rt = self.get_language_runtime(language)
-        if not rt:
-            return self.t("code_unsupported_runtime", language, ", ".join(LANGUAGE_RUNTIMES.keys()))
-        ext = rt.get("ext", language)
-        compile_cmd = rt.get("compile")
-        run_cmd = rt.get("run")
-        if not run_cmd:
-            return "❌ No run command defined."
-        runtime_exe = run_cmd[0]
-        if not shutil.which(runtime_exe):
-            return self.t("code_runtime_missing", runtime_exe, language)
+        # Không cần danh sách giới hạn, chỉ cần cảnh báo nếu runtime không có sẵn
+        prompt = (
+            f"Write a {language} program that {description}. "
+            "Provide only the code (inside a code block) with no extra explanation."
+        )
+        print(f"{Fore.CYAN}{self.t('code_generating', language)}...{Style.RESET_ALL}")
+        messages = [{"role": "user", "content": prompt}]
+        response = self.call_gemini(messages)
+        code = self.extract_code_from_response(response)
+        if not code:
+            print(f"{Fore.RED}{self.t('code_not_found')}{Style.RESET_ALL}")
+            return
 
-        # Tạo file tạm
-        tmp_dir = tempfile.mkdtemp(prefix="gemini_code_")
-        file_path = os.path.join(tmp_dir, f"code.{ext}")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(code)
+        print(f"{Fore.GREEN}{self.t('code_generated')}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'─'*40}")
+        print(code)
+        print(f"{Fore.CYAN}{'─'*40}")
 
-        try:
-            exe_path = None
-            # Biên dịch nếu có
-            if compile_cmd:
-                # Xác định file output
-                if ext in ("java", "scala", "kotlin"):  # special handling
-                    exe_path = file_path  # không tạo exe riêng
-                else:
-                    exe_path = os.path.join(tmp_dir, "program")
-                    if os.name == "nt":
-                        exe_path += ".exe"
-                compile_cmd_filled = [arg.replace("{file}", file_path).replace("{exe}", exe_path) for arg in compile_cmd]
-                comp = subprocess.run(compile_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
-                if comp.returncode != 0:
-                    return f"❌ Compilation failed:\n{comp.stderr}"
-            # Chạy
-            run_cmd_filled = []
-            for arg in run_cmd:
-                arg = arg.replace("{file}", file_path)
-                if exe_path:
-                    arg = arg.replace("{exe}", exe_path)
-                # Java cần classname không có .class
-                if "{classname}" in arg:
-                    classname = Path(file_path).stem
-                    arg = arg.replace("{classname}", classname)
-                run_cmd_filled.append(arg)
-            proc = subprocess.run(run_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
-            out = proc.stdout
-            if proc.stderr:
-                out += f"\n{Fore.RED}STDERR:\n{proc.stderr}{Style.RESET_ALL}"
-            if proc.returncode != 0:
-                out = self.t("code_exec_failed", proc.returncode) + "\n" + out
-            return out.strip() or "(no output)"
-        except subprocess.TimeoutExpired:
-            return self.t("code_timed_out", timeout)
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        run_confirm = input(f"{Fore.YELLOW}{self.t('code_run_prompt')}{Style.RESET_ALL}").strip().lower()
+        if run_confirm != 'y':
+            return
+
+        print(f"{Fore.BLUE}{self.t('code_running')}{Style.RESET_ALL}")
+        output = self.run_code(language, code)
+        print(f"{Fore.GREEN}{self.t('code_output')}{Style.RESET_ALL}")
+        print(output)
+        print()
+
+        # Hỏi lưu (tuỳ chọn)
+        save_confirm = input(self.t("code_save_prompt")).strip().lower()
+        if save_confirm == 'y':
+            name = input(self.t("code_name_prompt")).strip()
+            if not name:
+                name = re.sub(r'[^\w]', '_', description)[:30]
+            self.save_code(name, language, code)
 
     def save_code(self, name: str, language: str, code: str):
-        """Lưu code vào thư viện."""
+        """Lưu code vào thư mục generated_code (tạo nếu chưa có)."""
+        code_dir = DATA_DIR / "generated_code"
+        code_dir.mkdir(exist_ok=True)
         rt = self.get_language_runtime(language)
-        ext = rt["ext"] if rt else language
+        ext = rt["ext"] if rt and "ext" in rt else language
         safe_name = "".join(c for c in name if c.isalnum() or c in "._-")
         if not safe_name:
             safe_name = "untitled"
         file_name = f"{safe_name}.{ext}"
-        file_path = CODE_DIR / file_name
-        # Kiểm tra trùng
+        file_path = code_dir / file_name
         if file_path.exists():
             confirm = input(self.t("code_name_exists", safe_name)).strip().lower()
             if confirm != 'y':
                 return
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(code)
-        # Cập nhật index
-        index = json.loads(CODE_INDEX_FILE.read_text(encoding="utf-8"))
-        index = [entry for entry in index if entry["name"] != safe_name]
-        index.insert(0, {
-            "name": safe_name,
-            "language": language,
-            "file": file_name,
-            "created": datetime.now().isoformat(),
-            "description": ""  # có thể lưu mô tả sau
-        })
-        CODE_INDEX_FILE.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(self.t("code_saved", safe_name, file_name))
-
-    def load_code_index(self) -> list:
-        if not CODE_INDEX_FILE.exists():
-            return []
-        return json.loads(CODE_INDEX_FILE.read_text(encoding="utf-8"))
-
-    def get_code_entry(self, name: str) -> Optional[dict]:
-        index = self.load_code_index()
-        for entry in index:
-            if entry["name"] == name:
-                return entry
-        return None
-
-    def handle_code_command(self, args: str):
-        """Điều phối lệnh /code: tạo mới, list, show, run, delete."""
-        if not args.strip():
-            print(self.t("code_help"))
-            return
-
-        parts = args.strip().split(maxsplit=1)
-        subcmd = parts[0].lower()
-
-        # Các subcommand không cần ngôn ngữ
-        if subcmd == "list":
-            index = self.load_code_index()
-            if not index:
-                print(self.t("code_list_empty"))
-                return
-            print(f"\n{Fore.CYAN}{self.t('code_index_title')}{Style.RESET_ALL}")
-            print(f"{Fore.CYAN}{'─'*40}")
-            for i, entry in enumerate(index, 1):
-                print(f"{Fore.GREEN}{i}. {entry['name']} ({entry['language']}) - {entry['created'][:10]}")
-            print(f"{Fore.CYAN}{'─'*40}\n")
-            return
-
-        if subcmd in ("show", "run", "delete"):
-            if len(parts) < 2:
-                print(f"Usage: /code {subcmd} <name>")
-                return
-            name = parts[1].strip()
-            entry = self.get_code_entry(name)
-            if not entry:
-                print(self.t("code_run_not_found", name))
-                return
-            file_path = CODE_DIR / entry["file"]
-            if not file_path.exists():
-                print(f"❌ File missing: {file_path}")
-                return
-
-            if subcmd == "show":
-                code = file_path.read_text(encoding="utf-8")
-                print(f"\n{Fore.CYAN}{self.t('code_show_title', name)}{Style.RESET_ALL}")
-                print(f"{Fore.CYAN}{'─'*40}")
-                print(code)
-                print(f"{Fore.CYAN}{'─'*40}\n")
-            elif subcmd == "run":
-                code = file_path.read_text(encoding="utf-8")
-                print(self.t("code_running"))
-                output = self.run_code(entry["language"], code)
-                print(f"{Fore.GREEN}{self.t('code_output')}{Style.RESET_ALL}")
-                print(output)
-            elif subcmd == "delete":
-                confirm = input(self.t("code_delete_confirm", name)).strip().lower()
-                if confirm == 'y':
-                    file_path.unlink()
-                    index = self.load_code_index()
-                    index = [e for e in index if e["name"] != name]
-                    CODE_INDEX_FILE.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
-                    print(self.t("code_deleted", name))
-            return
-
-        # Nếu không phải subcommand: tạo code mới
-        if len(parts) < 2:
-            print(self.t("code_help"))
-            return
-        language = parts[0].lower()
-        description = parts[1]
-
-        # Không giới hạn: chỉ cần có runtime (dù là fallback) thì chấp nhận
-        prompt = (
-            f"Write a {language} program that {description}. "
-            "Provide only the code (inside a code block) with no extra explanation."
-        )
-        print(self.t("code_generating", language, description))
-        messages = [{"role": "user", "content": prompt}]
-        response = self.call_gemini(messages)
-        code = self.extract_code_from_response(response)
-        if not code:
-            print(self.t("code_not_found"))
-            return
-
-        print(f"\n{Fore.GREEN}{self.t('code_generated')}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'─'*40}")
-        print(code)
-        print(f"{Fore.CYAN}{'─'*40}\n")
-
-        # Hỏi chạy
-        run_confirm = input(self.t("code_run_prompt")).strip().lower()
-        if run_confirm == 'y':
-            print(self.t("code_running"))
-            output = self.run_code(language, code)
-            print(f"{Fore.GREEN}{self.t('code_output')}{Style.RESET_ALL}")
-            print(output)
-
-        # Hỏi lưu
-        save_confirm = input(self.t("code_save_prompt")).strip().lower()
-        if save_confirm == 'y':
-            name = input(self.t("code_name_prompt")).strip()
-            if not name:
-                # Tự đặt tên từ mô tả (rút gọn)
-                name = re.sub(r'[^\w]', '_', description)[:30]
-            self.save_code(name, language, code)
+        print(self.t("code_saved", safe_name))
 
     # ==================== CHAT LOOP ====================
     def chat_loop(self):
@@ -952,6 +866,7 @@ class GeminiChatbot:
             else:
                 print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
 
+# ==================== ĐIỂM KHỞI ĐẦU ====================
 if __name__ == "__main__":
     try:
         bot = GeminiChatbot()
