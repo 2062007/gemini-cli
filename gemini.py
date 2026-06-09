@@ -74,14 +74,15 @@ def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
             models = {}
             idx = 1
             for model in data.get("models", []):
-                model_id = model["name"].replace("models/", "")
-                if "generateContent" in model.get("supportedActions", []):
-                    # Lấy tên hiển thị đẹp: bỏ tiền tố models/ và viết hoa chữ đầu
-                    display_name = model.get("displayName", model_id)
+                # QUAN TRỌNG: API trả về trường "supported_actions" (có dấu gạch dưới)
+                actions = model.get("supported_actions", [])
+                if "generateContent" in actions:
+                    model_id = model["name"].replace("models/", "")
+                    display_name = model.get("display_name", model_id)  # cũng có thể có dấu gạch dưới
                     models[str(idx)] = {
                         "id": model_id,
                         "name": display_name,
-                        "desc": f"Supported methods: generateContent"
+                        "desc": f"Supported: generateContent"
                     }
                     idx += 1
             if models:
