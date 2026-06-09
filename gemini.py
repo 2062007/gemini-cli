@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gemini CLI Chatbot - Đơn giản, gọn nhẹ, dùng requests
-Tính năng: Lưu API key, nhiều đoạn chat, quản lý lịch sử
+Tất cả dữ liệu lưu trong thư mục hiện tại (không cần quyền đặc biệt)
 """
 
 import os
@@ -19,14 +19,16 @@ except ImportError:
     sys.exit(1)
 
 # ==================== CẤU HÌNH ====================
-CONFIG_DIR = Path.home() / ".gemini_cli"
+# DÙNG THƯ MỤC HIỆN TẠI, KHÔNG CẦN QUYỀN ĐẶC BIỆT
+SCRIPT_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
+CONFIG_DIR = SCRIPT_DIR / "gemini_data"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CHATS_DIR = CONFIG_DIR / "chats"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 
 # ==================== KHỞI TẠO THƯ MỤC ====================
 def init_dirs():
-    """Tạo thư mục và file cấu hình nếu chưa có"""
+    """Tạo thư mục và file cấu hình nếu chưa có (trong thư mục hiện tại)"""
     CONFIG_DIR.mkdir(exist_ok=True)
     CHATS_DIR.mkdir(exist_ok=True)
     
@@ -35,6 +37,8 @@ def init_dirs():
     
     if not CONFIG_FILE.exists():
         save_config({"api_key": "", "current_chat": "default"})
+    
+    print(f"{Fore.BLUE}📁 Dữ liệu lưu tại: {CONFIG_DIR}{Style.RESET_ALL}")
 
 def load_config():
     """Đọc file cấu hình"""
@@ -69,7 +73,11 @@ def get_api_key():
 # ==================== QUẢN LÝ ĐOẠN CHAT ====================
 def get_chat_file(chat_name):
     """Đường dẫn file chat"""
-    return CHATS_DIR / f"{chat_name}.json"
+    # Đảm bảo tên file hợp lệ (không có ký tự đặc biệt)
+    safe_name = "".join(c for c in chat_name if c.isalnum() or c in "._-")
+    if not safe_name:
+        safe_name = "default"
+    return CHATS_DIR / f"{safe_name}.json"
 
 def load_chat(chat_name):
     """Đọc nội dung đoạn chat"""
@@ -92,14 +100,18 @@ def list_chats():
     """Liệt kê tất cả các đoạn chat"""
     chats = []
     for f in CHATS_DIR.glob("*.json"):
-        data = json.loads(f.read_text())
-        msg_count = len(data.get("messages", [])) // 2
-        updated = data.get("updated_at", "Unknown")[:16]
-        chats.append({
-            "name": f.stem,
-            "msg_count": msg_count,
-            "updated": updated
-        })
+        try:
+            data = json.loads(f.read_text())
+            msg_count = len(data.get("messages", [])) // 2
+            updated = data.get("updated_at", "Unknown")[:16]
+            chats.append({
+                "name": data.get("name", f.stem),
+                "msg_count": msg_count,
+                "updated": updated
+            })
+        except:
+            # Bỏ qua file lỗi
+            pass
     return sorted(chats, key=lambda x: x["updated"], reverse=True)
 
 def delete_chat(chat_name):
@@ -120,10 +132,13 @@ def delete_chat(chat_name):
 
 def update_history(chat_name):
     """Cập nhật lịch sử các đoạn chat đã dùng"""
-    history = json.loads(HISTORY_FILE.read_text())
+    try:
+        history = json.loads(HISTORY_FILE.read_text())
+    except:
+        history = []
     
     # Xoá tên cũ nếu có
-    history = [h for h in history if h["name"] != chat_name]
+    history = [h for h in history if h.get("name") != chat_name]
     
     # Thêm vào đầu
     history.insert(0, {
@@ -137,7 +152,10 @@ def update_history(chat_name):
 
 def show_history():
     """Hiển thị lịch sử các đoạn chat"""
-    history = json.loads(HISTORY_FILE.read_text())
+    try:
+        history = json.loads(HISTORY_FILE.read_text())
+    except:
+        history = []
     
     if not history:
         print(f"{Fore.YELLOW}📭 Chưa có lịch sử đoạn chat nào{Style.RESET_ALL}")
@@ -148,9 +166,9 @@ def show_history():
     print(f"{Fore.CYAN}{'='*60}")
     
     for i, h in enumerate(history, 1):
-        name = h["name"]
+        name = h.get("name", "Unknown")
         msg_count = h.get("message_count", 0)
-        last_used = h["last_used"][:16] if h["last_used"] else "Unknown"
+        last_used = h.get("last_used", "Unknown")[:16]
         print(f"{Fore.GREEN}{i:2d}. {Fore.WHITE}{name}")
         print(f"      {Fore.BLUE}📝 {msg_count} tin nhắn | 🕐 {last_used}")
     
@@ -182,7 +200,9 @@ def call_gemini(api_key, messages):
             error_msg = response.json().get("error", {}).get("message", "Lỗi không xác định")
             return f"{Fore.RED}❌ Lỗi API: {error_msg}{Style.RESET_ALL}"
     except requests.exceptions.Timeout:
-        return f"{Fore.RED}❌ Timeout: Gemini không phản hồi{Style.RESET_ALL}"
+        return f"{Fore.RED}❌ Timeout: Gemini không phản hồi (30 giây){Style.RESET_ALL}"
+    except requests.exceptions.ConnectionError:
+        return f"{Fore.RED}❌ Lỗi kết nối: Kiểm tra internet{Style.RESET_ALL}"
     except Exception as e:
         return f"{Fore.RED}❌ Lỗi: {e}{Style.RESET_ALL}"
 
@@ -198,10 +218,11 @@ def chat_loop(chat_name, api_key):
     
     # Hiển thị lịch sử chat gần đây
     if messages:
-        print(f"{Fore.YELLOW}--- Lịch sử chat gần đây ---{Style.RESET_ALL}")
-        for msg in messages[-6:]:
-            role_icon = f"{Fore.GREEN}👤 Bạn" if msg["role"] == "user" else f"{Fore.MAGENTA}🤖 Gemini"
-            print(f"{role_icon}: {msg['content'][:100]}...")
+        print(f"{Fore.YELLOW}--- {len(messages)//2} tin nhắn trong lịch sử ---{Style.RESET_ALL}")
+        for msg in messages[-4:]:
+            role_icon = f"{Fore.GREEN}👤" if msg["role"] == "user" else f"{Fore.MAGENTA}🤖"
+            preview = msg['content'][:80].replace('\n', ' ')
+            print(f"{role_icon} {preview}...")
         print()
     
     while True:
@@ -291,14 +312,12 @@ def main_menu():
         if choice == "1":
             result = chat_loop(current_chat, api_key)
             if result == "new":
-                # Tạo chat mới
                 new_name = input(f"{Fore.GREEN}Tên đoạn chat mới (để trống = datetime): {Style.RESET_ALL}").strip()
                 if not new_name:
                     new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                 current_chat = new_name
                 save_config({**load_config(), "current_chat": current_chat})
             elif result == "deleted":
-                # Chat vừa bị xoá, cần tạo mới hoặc chọn cũ
                 chats = list_chats()
                 if chats:
                     current_chat = chats[0]["name"]
@@ -369,6 +388,8 @@ def main_menu():
 if __name__ == "__main__":
     try:
         main_menu()
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}👋 Tạm biệt!{Style.RESET_ALL}")
     except Exception as e:
         print(f"{Fore.RED}Lỗi không mong muốn: {e}{Style.RESET_ALL}")
         sys.exit(1)
