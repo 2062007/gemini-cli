@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Gemini CLI Chatbot - Hỗ trợ đa ngôn ngữ (English/Vietnamese), tự động lấy danh sách model.
-Dùng requests và colorama, lưu dữ liệu tại thư mục hiện tại.
+Gemini CLI Chatbot - Đa ngôn ngữ (English/Việt), tự động lấy danh sách model.
+Hỗ trợ lưu cấu hình (API key, ngôn ngữ, model), chỉ chọn ngôn ngữ 1 lần.
+Dùng requests + colorama, lưu dữ liệu tại thư mục hiện hành.
 """
 
 import json
@@ -9,7 +10,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 try:
     import requests
@@ -22,15 +23,15 @@ except ImportError as e:
 
 # ==================== CẤU HÌNH ====================
 SCRIPT_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
-CONFIG_DIR = SCRIPT_DIR / "gemini_data"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-CHATS_DIR = CONFIG_DIR / "chats"
-HISTORY_FILE = CONFIG_DIR / "history.json"
-MODEL_CACHE_FILE = CONFIG_DIR / "model_cache.json"
+DATA_DIR = SCRIPT_DIR / "gemini_data"
+CONFIG_FILE = DATA_DIR / "config.json"
+CHATS_DIR = DATA_DIR / "chats"
+HISTORY_FILE = DATA_DIR / "history.json"
+MODEL_CACHE_FILE = DATA_DIR / "model_cache.json"
 
 DEFAULT_MODEL_ID = "gemini-2.0-flash"
 
-# ==================== NGÔN NGỮ ====================
+# ==================== TỪ ĐIỂN ĐA NGÔN NGỮ ====================
 TEXTS = {
     "en": {
         "data_dir": "📁 Data saved at: {}",
@@ -82,8 +83,9 @@ TEXTS = {
         "menu_history": "3. View chat history",
         "menu_model": "4. Select Gemini model (auto-updated)",
         "menu_change_key": "5. Change API key",
-        "menu_exit": "6. Exit",
-        "prompt_choice": "🔹 Choice (1-6): ",
+        "menu_change_lang": "6. Change language / Đổi ngôn ngữ",
+        "menu_exit": "7. Exit",
+        "prompt_choice": "🔹 Choice (1-7): ",
         "new_chat_name": "New chat name (Enter = datetime): ",
         "no_chats": "📭 No chats yet, create one.",
         "chat_list_title": "📋 Existing chats:",
@@ -96,6 +98,13 @@ TEXTS = {
         "api_key_updated": "✅ API key updated.",
         "invalid_api_key": "Invalid API key.",
         "error_unexpected": "Unexpected error: {}",
+        # Language selection
+        "lang_select_title": "🌐 Select language / Chọn ngôn ngữ:",
+        "lang_option_en": "1. English",
+        "lang_option_vi": "2. Tiếng Việt",
+        "lang_prompt": "Your choice / Lựa chọn của bạn (1/2): ",
+        "lang_changed": "✅ Language changed to English.",
+        "lang_invalid": "❌ Invalid choice, keeping current language.",
     },
     "vi": {
         "data_dir": "📁 Dữ liệu lưu tại: {}",
@@ -147,8 +156,9 @@ TEXTS = {
         "menu_history": "3. Xem lịch sử các đoạn chat",
         "menu_model": "4. Chọn Model Gemini (tự động cập nhật)",
         "menu_change_key": "5. Đổi API key",
-        "menu_exit": "6. Thoát",
-        "prompt_choice": "🔹 Lựa chọn (1-6): ",
+        "menu_change_lang": "6. Thay đổi ngôn ngữ / Change language",
+        "menu_exit": "7. Thoát",
+        "prompt_choice": "🔹 Lựa chọn (1-7): ",
         "new_chat_name": "Tên đoạn chat mới (để trống = datetime): ",
         "no_chats": "📭 Chưa có đoạn chat nào, tạo mới.",
         "chat_list_title": "📋 Các đoạn chat hiện có:",
@@ -161,52 +171,98 @@ TEXTS = {
         "api_key_updated": "✅ Đã cập nhật API key.",
         "invalid_api_key": "API key không hợp lệ.",
         "error_unexpected": "Lỗi không mong muốn: {}",
+        # Language selection
+        "lang_select_title": "🌐 Chọn ngôn ngữ / Select language:",
+        "lang_option_en": "1. English",
+        "lang_option_vi": "2. Tiếng Việt",
+        "lang_prompt": "Lựa chọn của bạn / Your choice (1/2): ",
+        "lang_changed": "✅ Đã chuyển sang Tiếng Việt.",
+        "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
     }
 }
 
-# Biến toàn cục lưu ngôn ngữ hiện tại
-CURRENT_LANG = "vi"  # mặc định, sẽ được ghi đè ngay khi khởi động
+# Biến toàn cục cho ngôn ngữ hiện tại
+CURRENT_LANG = "vi"
 
 def get_text(key: str) -> str:
-    """Lấy chuỗi theo ngôn ngữ hiện tại."""
-    return TEXTS[CURRENT_LANG].get(key, key)
+    """Trả về chuỗi theo ngôn ngữ hiện tại."""
+    return TEXTS.get(CURRENT_LANG, TEXTS["vi"]).get(key, key)
 
-# ==================== KHỞI TẠO THƯ MỤC ====================
-def init_dirs():
-    CONFIG_DIR.mkdir(exist_ok=True)
+
+# ==================== QUẢN LÝ THƯ MỤC & FILE ====================
+def ensure_data_dirs():
+    """Tạo thư mục dữ liệu và file lịch sử nếu chưa có (không in thông báo)."""
+    DATA_DIR.mkdir(exist_ok=True)
     CHATS_DIR.mkdir(exist_ok=True)
     if not HISTORY_FILE.exists():
-        HISTORY_FILE.write_text(json.dumps([], indent=2))
-    if not CONFIG_FILE.exists():
-        # Tạo config mặc định, language sẽ được cập nhật sau
-        save_config({"api_key": "", "current_chat": "default", "model": DEFAULT_MODEL_ID, "language": CURRENT_LANG})
-    print(f"{Fore.BLUE}{get_text('data_dir').format(CONFIG_DIR)}{Style.RESET_ALL}")
+        HISTORY_FILE.write_text(json.dumps([], indent=2), encoding="utf-8")
 
-def load_config():
-    return json.loads(CONFIG_FILE.read_text())
+def load_config() -> dict:
+    """Đọc file cấu hình, trả về dict; nếu file không tồn tại trả về dict rỗng."""
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-def save_config(config):
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+def save_config(config: dict):
+    """Ghi cấu hình ra file."""
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
 
-# ==================== CHỌN NGÔN NGỮ (CHẠY ĐẦU TIÊN) ====================
-def initial_language_prompt():
+
+# ==================== CHỌN NGÔN NGỮ ====================
+def language_selection_prompt() -> str:
     """
-    Hiển thị lời nhắc chọn ngôn ngữ ngay khi bắt đầu, trước mọi thao tác khác.
-    Không sử dụng get_text() để tránh phụ thuộc vào CURRENT_LANG chưa được thiết lập.
+    Hiển thị prompt chọn ngôn ngữ (không phụ thuộc vào CURRENT_LANG hiện tại)
+    Trả về 'en' hoặc 'vi'.
     """
-    global CURRENT_LANG
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("🌐 Select language / Chọn ngôn ngữ:")
     print("1. English")
     print("2. Tiếng Việt")
     choice = input("Your choice / Lựa chọn của bạn (1/2): ").strip()
-    CURRENT_LANG = "en" if choice == "1" else "vi"
-    print(f"{Fore.GREEN}✅ Language set to {CURRENT_LANG.upper()}{Style.RESET_ALL}")
+    return "en" if choice == "1" else "vi"
+
+def setup_language(config: dict) -> str:
+    """
+    Xác định ngôn ngữ sử dụng:
+    - Nếu trong config đã có language hợp lệ -> dùng nó.
+    - Nếu chưa có -> hỏi người dùng và lưu lại.
+    Trả về mã ngôn ngữ ('en'/'vi').
+    """
+    lang = config.get("language")
+    if lang in ("en", "vi"):
+        return lang
+    # Chưa có hoặc không hợp lệ -> yêu cầu chọn
+    new_lang = language_selection_prompt()
+    config["language"] = new_lang
+    save_config(config)
+    return new_lang
+
+def change_language(config: dict):
+    """Đổi ngôn ngữ từ menu."""
+    global CURRENT_LANG
+    print("\n" + f"{Fore.CYAN}{get_text('lang_select_title')}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{get_text('lang_option_en')}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{get_text('lang_option_vi')}{Style.RESET_ALL}")
+    choice = input(f"{Fore.YELLOW}{get_text('lang_prompt')}{Style.RESET_ALL}").strip()
+    if choice == "1":
+        CURRENT_LANG = "en"
+    elif choice == "2":
+        CURRENT_LANG = "vi"
+    else:
+        print(f"{Fore.RED}{get_text('lang_invalid')}{Style.RESET_ALL}")
+        return
+    config["language"] = CURRENT_LANG
+    save_config(config)
+    print(f"{Fore.GREEN}{get_text('lang_changed')}{Style.RESET_ALL}")
+
 
 # ==================== QUẢN LÝ API KEY ====================
-def get_api_key():
-    config = load_config()
-    if not config.get("api_key"):
+def get_api_key(config: dict) -> str:
+    """Lấy API key từ config, nếu chưa có yêu cầu nhập."""
+    api_key = config.get("api_key", "")
+    if not api_key:
         print(f"\n{Fore.YELLOW}{get_text('no_api_key')}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{get_text('get_api_key_url')}{Style.RESET_ALL}")
         api_key = input(f"{Fore.GREEN}{get_text('enter_api_key')}{Style.RESET_ALL}").strip()
@@ -217,8 +273,9 @@ def get_api_key():
             return api_key
         else:
             print(f"{Fore.RED}{get_text('api_key_empty')}{Style.RESET_ALL}")
-            return get_api_key()
-    return config["api_key"]
+            return get_api_key(config)  # Gọi lại nếu bỏ trống
+    return api_key
+
 
 # ==================== LẤY DANH SÁCH MODEL ĐỘNG ====================
 def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
@@ -240,7 +297,7 @@ def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
                         desc_parts.append(model.get("description")[:60])
                     if model.get("inputTokenLimit"):
                         desc_parts.append(f"Input: {model.get('inputTokenLimit'):,} tokens")
-                    desc_parts.append(f"Supports: generateContent")
+                    desc_parts.append("Supports: generateContent")
                     models[str(idx)] = {
                         "id": model_id,
                         "name": display_name,
@@ -249,15 +306,16 @@ def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
                     idx += 1
             if models:
                 cache_data = {"timestamp": time.time(), "models": models}
-                MODEL_CACHE_FILE.write_text(json.dumps(cache_data, indent=2))
+                MODEL_CACHE_FILE.write_text(json.dumps(cache_data, indent=2, ensure_ascii=False), encoding="utf-8")
                 print(f"{Fore.GREEN}{get_text('found_models').format(len(models))}{Style.RESET_ALL}")
                 return models
     except Exception as e:
         print(f"{Fore.YELLOW}{get_text('fetch_error').format(e)}{Style.RESET_ALL}")
     
+    # Dùng cache nếu có và còn mới (dưới 24h)
     if MODEL_CACHE_FILE.exists():
         try:
-            cache_data = json.loads(MODEL_CACHE_FILE.read_text())
+            cache_data = json.loads(MODEL_CACHE_FILE.read_text(encoding="utf-8"))
             if time.time() - cache_data.get("timestamp", 0) < 86400:
                 print(f"{Fore.BLUE}{get_text('using_cache')}{Style.RESET_ALL}")
                 return cache_data.get("models")
@@ -276,9 +334,8 @@ def get_available_models(api_key: str) -> Dict[str, Dict]:
         "3": {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro", "desc": "Powerful, 2M context."},
     }
 
-def choose_model(api_key: str) -> str:
+def choose_model(api_key: str, config: dict) -> str:
     models = get_available_models(api_key)
-    config = load_config()
     current_model_id = config.get("model", DEFAULT_MODEL_ID)
 
     print(f"\n{Fore.CYAN}{'='*60}")
@@ -321,33 +378,34 @@ def choose_model(api_key: str) -> str:
             print(f"{Fore.RED}{get_text('invalid_choice')}{Style.RESET_ALL}")
         return current_model_id
 
+
 # ==================== QUẢN LÝ ĐOẠN CHAT ====================
-def get_chat_file(chat_name):
+def get_chat_file(chat_name: str) -> Path:
     safe_name = "".join(c for c in chat_name if c.isalnum() or c in "._-")
     if not safe_name:
         safe_name = "default"
     return CHATS_DIR / f"{safe_name}.json"
 
-def load_chat(chat_name):
+def load_chat(chat_name: str) -> list:
     chat_file = get_chat_file(chat_name)
     if chat_file.exists():
-        data = json.loads(chat_file.read_text())
+        data = json.loads(chat_file.read_text(encoding="utf-8"))
         return data.get("messages", [])
     return []
 
-def save_chat(chat_name, messages):
+def save_chat(chat_name: str, messages: list):
     chat_file = get_chat_file(chat_name)
     chat_file.write_text(json.dumps({
         "name": chat_name,
         "messages": messages,
         "updated_at": datetime.now().isoformat()
-    }, indent=2, ensure_ascii=False))
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-def list_chats():
+def list_chats() -> list:
     chats = []
     for f in CHATS_DIR.glob("*.json"):
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
             msg_count = len(data.get("messages", [])) // 2
             updated = data.get("updated_at", "Unknown")[:16]
             chats.append({
@@ -359,7 +417,7 @@ def list_chats():
             pass
     return sorted(chats, key=lambda x: x["updated"], reverse=True)
 
-def delete_chat(chat_name):
+def delete_chat(chat_name: str) -> bool:
     chat_file = get_chat_file(chat_name)
     if chat_file.exists():
         confirm = input(f"{Fore.RED}{get_text('delete_confirm').format(chat_name)}{Style.RESET_ALL}")
@@ -374,9 +432,9 @@ def delete_chat(chat_name):
         print(f"{Fore.RED}{get_text('not_found_chat').format(chat_name)}{Style.RESET_ALL}")
         return False
 
-def update_history(chat_name):
+def update_history(chat_name: str):
     try:
-        history = json.loads(HISTORY_FILE.read_text())
+        history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
     except:
         history = []
     history = [h for h in history if h.get("name") != chat_name]
@@ -385,11 +443,11 @@ def update_history(chat_name):
         "last_used": datetime.now().isoformat(),
         "message_count": len(load_chat(chat_name)) // 2
     })
-    HISTORY_FILE.write_text(json.dumps(history[:50], indent=2))
+    HISTORY_FILE.write_text(json.dumps(history[:50], indent=2, ensure_ascii=False), encoding="utf-8")
 
 def show_history():
     try:
-        history = json.loads(HISTORY_FILE.read_text())
+        history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
     except:
         history = []
     if not history:
@@ -406,8 +464,9 @@ def show_history():
         print(f"      {Fore.BLUE}📝 {msg_count} messages | 🕐 {last_used}")
     print(f"{Fore.CYAN}{'='*60}\n")
 
+
 # ==================== GỌI GEMINI API ====================
-def call_gemini(api_key, messages, model_id):
+def call_gemini(api_key: str, messages: list, model_id: str) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
     contents = []
     for msg in messages:
@@ -433,8 +492,9 @@ def call_gemini(api_key, messages, model_id):
     except Exception as e:
         return f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
-# ==================== MAIN CHAT LOOP (ĐÃ SỬA HIỂN THỊ ĐẦY ĐỦ) ====================
-def chat_loop(chat_name, api_key, model_id):
+
+# ==================== VÒNG LẶP CHAT ====================
+def chat_loop(chat_name: str, api_key: str, model_id: str, config: dict):
     messages = load_chat(chat_name)
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"{Fore.MAGENTA}{get_text('chatting').format(chat_name)}{Style.RESET_ALL}")
@@ -442,12 +502,11 @@ def chat_loop(chat_name, api_key, model_id):
     print(f"{Fore.BLUE}{get_text('commands_label')}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*60}\n")
     
-    # HIỂN THỊ TOÀN BỘ LỊCH SỬ, KHÔNG CẮT NGẮN
+    # Hiển thị toàn bộ lịch sử
     if messages:
         print(f"{Fore.YELLOW}{get_text('history_label').format(len(messages)//2)}{Style.RESET_ALL}")
         for msg in messages:
             role_icon = f"{Fore.GREEN}{get_text('user_prefix')}" if msg["role"] == "user" else f"{Fore.MAGENTA}{get_text('gemini_prefix')}"
-            # Hiển thị nguyên văn nội dung, thay xuống dòng bằng xuống dòng + thụt đầu dòng cho đẹp
             content = msg['content'].replace('\n', '\n           ')
             print(f"{role_icon}: {content}")
         print()
@@ -473,10 +532,9 @@ def chat_loop(chat_name, api_key, model_id):
                 show_history()
                 continue
             elif cmd == "/model":
-                new_model_id = choose_model(api_key)
+                new_model_id = choose_model(api_key, config)
                 if new_model_id != model_id:
                     model_id = new_model_id
-                    config = load_config()
                     config["model"] = model_id
                     save_config(config)
                     print(f"{Fore.GREEN}{get_text('model_changed')}{Style.RESET_ALL}")
@@ -497,25 +555,32 @@ def chat_loop(chat_name, api_key, model_id):
             update_history(chat_name)
             return "quit"
 
-# ==================== MAIN MENU ====================
+
+# ==================== MENU CHÍNH ====================
 def main_menu():
-    # 1. Hỏi ngôn ngữ ngay từ đầu, trước mọi thứ khác
-    initial_language_prompt()
-    
-    # 2. Sau khi có ngôn ngữ, khởi tạo thư mục và cập nhật config
-    init_dirs()
+    global CURRENT_LANG
+
+    # 1. Đảm bảo thư mục dữ liệu (không in gì)
+    ensure_data_dirs()
+
+    # 2. Đọc cấu hình (có thể rỗng)
     config = load_config()
-    config["language"] = CURRENT_LANG
-    save_config(config)
-    
-    # 3. Lấy API key (nếu cần nhập, thông báo đã đúng ngôn ngữ)
-    api_key = get_api_key()
+
+    # 3. Xác định ngôn ngữ (lưu ngay nếu chưa có)
+    CURRENT_LANG = setup_language(config)
+
+    # 4. Thông báo thư mục dữ liệu với ngôn ngữ hiện tại
+    print(f"{Fore.BLUE}{get_text('data_dir').format(DATA_DIR)}{Style.RESET_ALL}")
+
+    # 5. Lấy API key
+    api_key = get_api_key(config)
     if not api_key:
         return
-    
+
+    # 6. Lấy model hiện tại và chat hiện tại
     current_model = config.get("model", DEFAULT_MODEL_ID)
     current_chat = config.get("current_chat", "default")
-    
+
     while True:
         print(f"\n{Fore.CYAN}{'='*60}")
         print(f"{Fore.MAGENTA}{get_text('main_title')}{Style.RESET_ALL}")
@@ -525,25 +590,24 @@ def main_menu():
         print(f"{Fore.GREEN}{get_text('menu_history')}{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{get_text('menu_model')}{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{get_text('menu_change_key')}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}{get_text('menu_change_lang')}{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{get_text('menu_exit')}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{'='*60}")
         
         choice = input(f"{Fore.YELLOW}{get_text('prompt_choice')}{Style.RESET_ALL}").strip()
         
         if choice == "1":
-            result = chat_loop(current_chat, api_key, current_model)
+            result = chat_loop(current_chat, api_key, current_model, config)
             if result == "new":
                 new_name = input(f"{Fore.GREEN}{get_text('new_chat_name')}{Style.RESET_ALL}").strip()
                 if not new_name:
                     new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                 current_chat = new_name
-                config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
             elif result == "deleted":
                 chats = list_chats()
                 current_chat = chats[0]["name"] if chats else datetime.now().strftime("%Y%m%d_%H%M%S")
-                config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
             elif result == "quit":
@@ -556,7 +620,6 @@ def main_menu():
                 if not new_name:
                     new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                 current_chat = new_name
-                config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
                 continue
@@ -575,7 +638,6 @@ def main_menu():
                     current_chat = chats[sel-1]["name"]
                 else:
                     continue
-                config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
                 print(f"{Fore.GREEN}{get_text('switched_chat').format(current_chat)}{Style.RESET_ALL}")
@@ -584,11 +646,10 @@ def main_menu():
         elif choice == "3":
             show_history()
         elif choice == "4":
-            current_model = choose_model(api_key)
+            current_model = choose_model(api_key, config)
         elif choice == "5":
             new_key = input(f"{Fore.GREEN}{get_text('new_api_key')}{Style.RESET_ALL}").strip()
             if new_key:
-                config = load_config()
                 config["api_key"] = new_key
                 save_config(config)
                 api_key = new_key
@@ -596,8 +657,14 @@ def main_menu():
             else:
                 print(f"{Fore.RED}{get_text('invalid_api_key')}{Style.RESET_ALL}")
         elif choice == "6":
+            change_language(config)
+            # Sau khi đổi ngôn ngữ, CURRENT_LANG đã được cập nhật, các thông báo sau sẽ dùng ngôn ngữ mới
+        elif choice == "7":
             print(f"{Fore.YELLOW}{get_text('goodbye')}{Style.RESET_ALL}")
             break
+        else:
+            print(f"{Fore.RED}{get_text('invalid_choice')}{Style.RESET_ALL}")
+
 
 if __name__ == "__main__":
     try:
