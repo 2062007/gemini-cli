@@ -61,7 +61,6 @@ LANGUAGE_RUNTIMES = {
     "powershell": {"ext": "ps1", "run": ["pwsh", "-File", "{file}"]},
     "ps1": {"ext": "ps1", "run": ["pwsh", "-File", "{file}"]},
     "sqlite": {"ext": "sql", "run": ["sqlite3", "{file}"]},
-    # Thêm tuỳ ý...
 }
 
 # ==================== TỪ ĐIỂN ĐA NGÔN NGỮ ====================
@@ -226,7 +225,7 @@ TEXTS = {
         "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
         "thinking": "🤔 Đang suy nghĩ...",
         # Code
-        "code_help": "Cách dùng: /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
+        "code_help": "Cách dùng:\n  /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
         "code_generating": "📝 Đang tạo code {} cho yêu cầu: {}...",
         "code_generated": "✅ Code đã tạo:",
         "code_run_prompt": "Chạy đoạn code này? (y/N): ",
@@ -560,11 +559,9 @@ class GeminiChatbot:
 
     # ==================== CODE: KHÔNG GIỚI HẠN NGÔN NGỮ ====================
     def get_language_runtime(self, lang: str) -> Optional[dict]:
-        """Trả về cấu hình runtime cho ngôn ngữ (có thể fallback)."""
         lang = lang.lower().strip()
         if lang in LANGUAGE_RUNTIMES:
             return LANGUAGE_RUNTIMES[lang]
-        # Đoán một số tên phổ biến
         if lang in ("c++", "cpp"):
             return LANGUAGE_RUNTIMES.get("cpp")
         if lang.startswith("python"):
@@ -577,11 +574,9 @@ class GeminiChatbot:
             return LANGUAGE_RUNTIMES.get("powershell")
         if lang in ("ts", "typescript"):
             return LANGUAGE_RUNTIMES.get("typescript")
-        # Fallback: thử dùng chính tên ngôn ngữ làm runtime với file mở rộng là tên ngôn ngữ
         return {"ext": lang, "run": [lang, "{file}"]}
 
     def run_code(self, language: str, code: str, timeout=30) -> str:
-        """Thực thi code bằng file tạm, hỗ trợ biên dịch nếu cần."""
         rt = self.get_language_runtime(language)
         if not rt:
             return self.t("code_unsupported_runtime", language)
@@ -591,7 +586,6 @@ class GeminiChatbot:
         if not run_cmd:
             return "❌ No run command defined."
         runtime_exe = run_cmd[0]
-        # Kiểm tra runtime có tồn tại
         if not shutil.which(runtime_exe):
             return self.t("code_runtime_missing", runtime_exe, language)
 
@@ -601,7 +595,6 @@ class GeminiChatbot:
                 f.write(code)
             try:
                 exe_path = None
-                # Biên dịch nếu có
                 if compile_cmd:
                     if ext in ("java", "scala", "kotlin"):
                         exe_path = file_path
@@ -613,7 +606,7 @@ class GeminiChatbot:
                     comp = subprocess.run(compile_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
                     if comp.returncode != 0:
                         return f"❌ Compilation failed:\n{comp.stderr}"
-                # Chạy
+
                 run_cmd_filled = []
                 for arg in run_cmd:
                     arg = arg.replace("{file}", file_path)
@@ -629,6 +622,7 @@ class GeminiChatbot:
                         jar = os.path.splitext(file_path)[0] + ".jar"
                         arg = arg.replace("{jar}", jar)
                     run_cmd_filled.append(arg)
+
                 proc = subprocess.run(run_cmd_filled, capture_output=True, text=True, timeout=timeout, cwd=tmp_dir)
                 out = proc.stdout
                 if proc.stderr:
@@ -647,7 +641,6 @@ class GeminiChatbot:
         return text.strip()
 
     def handle_code_command(self, args: str):
-        """Xử lý lệnh /code <ngôn ngữ> <mô tả> - không giới hạn ngôn ngữ."""
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2:
             print(f"{Fore.YELLOW}{self.t('code_help')}{Style.RESET_ALL}")
@@ -655,12 +648,11 @@ class GeminiChatbot:
         language = parts[0].lower()
         description = parts[1]
 
-        # Không cần danh sách giới hạn, chỉ cần cảnh báo nếu runtime không có sẵn
         prompt = (
             f"Write a {language} program that {description}. "
             "Provide only the code (inside a code block) with no extra explanation."
         )
-        print(f"{Fore.CYAN}{self.t('code_generating', language)}...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{self.t('code_generating', language, description)}{Style.RESET_ALL}")
         messages = [{"role": "user", "content": prompt}]
         response = self.call_gemini(messages)
         code = self.extract_code_from_response(response)
@@ -683,7 +675,6 @@ class GeminiChatbot:
         print(output)
         print()
 
-        # Hỏi lưu (tuỳ chọn)
         save_confirm = input(self.t("code_save_prompt")).strip().lower()
         if save_confirm == 'y':
             name = input(self.t("code_name_prompt")).strip()
@@ -692,7 +683,6 @@ class GeminiChatbot:
             self.save_code(name, language, code)
 
     def save_code(self, name: str, language: str, code: str):
-        """Lưu code vào thư mục generated_code (tạo nếu chưa có)."""
         code_dir = DATA_DIR / "generated_code"
         code_dir.mkdir(exist_ok=True)
         rt = self.get_language_runtime(language)
