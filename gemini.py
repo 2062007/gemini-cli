@@ -62,7 +62,7 @@ TEXTS = {
         "chatting": "💬 Chatting: {}",
         "model_label": "📡 Model: {}",
         "commands_label": "📝 Commands: /menu | /new | /delete | /history | /model | /quit",
-        "history_label": "--- {} messages in history ---",
+        "history_label": "--- Full chat history ({} messages) ---",
         "user_prefix": "👤 You",
         "gemini_prefix": "🤖 Gemini",
         "back_to_menu": "🔙 Returning to main menu...",
@@ -127,7 +127,7 @@ TEXTS = {
         "chatting": "💬 Đang chat: {}",
         "model_label": "📡 Model: {}",
         "commands_label": "📝 Lệnh: /menu | /new | /delete | /history | /model | /quit",
-        "history_label": "--- {} tin nhắn trong lịch sử ---",
+        "history_label": "--- Toàn bộ lịch sử ({} tin nhắn) ---",
         "user_prefix": "👤 Bạn",
         "gemini_prefix": "🤖 Gemini",
         "back_to_menu": "🔙 Quay lại menu chính...",
@@ -437,7 +437,7 @@ def call_gemini(api_key, messages, model_id):
     except Exception as e:
         return f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
-# ==================== MAIN CHAT LOOP ====================
+# ==================== MAIN CHAT LOOP (ĐÃ SỬA HIỂN THỊ ĐẦY ĐỦ) ====================
 def chat_loop(chat_name, api_key, model_id):
     messages = load_chat(chat_name)
     print(f"\n{Fore.CYAN}{'='*60}")
@@ -446,12 +446,14 @@ def chat_loop(chat_name, api_key, model_id):
     print(f"{Fore.BLUE}{get_text('commands_label')}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*60}\n")
     
+    # HIỂN THỊ TOÀN BỘ LỊCH SỬ, KHÔNG CẮT NGẮN
     if messages:
         print(f"{Fore.YELLOW}{get_text('history_label').format(len(messages)//2)}{Style.RESET_ALL}")
-        for msg in messages[-4:]:
+        for msg in messages:
             role_icon = f"{Fore.GREEN}{get_text('user_prefix')}" if msg["role"] == "user" else f"{Fore.MAGENTA}{get_text('gemini_prefix')}"
-            preview = msg['content'][:80].replace('\n', ' ')
-            print(f"{role_icon}: {preview}...")
+            # Hiển thị nguyên văn nội dung, thay xuống dòng bằng xuống dòng + thụt đầu dòng cho đẹp
+            content = msg['content'].replace('\n', '\n           ')
+            print(f"{role_icon}: {content}")
         print()
     
     while True:
@@ -502,7 +504,7 @@ def chat_loop(chat_name, api_key, model_id):
 # ==================== MAIN MENU ====================
 def main_menu():
     init_dirs()
-    choose_language()  # chọn ngôn ngữ ngay đầu
+    choose_language()
     api_key = get_api_key()
     if not api_key:
         return
