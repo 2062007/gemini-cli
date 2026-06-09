@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Gemini CLI Chatbot - Đầy đủ model (cả cũ và mới), có ghi chú free/paid.
-Dùng requests và colorama, lưu dữ liệu tại thư mục hiện tại.
+Gemini CLI Chatbot - Hoàn toàn động: tự động lấy danh sách model từ Google API.
+Dùng requests, colorama, tabulate. Lưu dữ liệu trong thư mục hiện tại.
 """
 
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Optional
 
 try:
     import requests
@@ -25,37 +26,9 @@ CONFIG_DIR = SCRIPT_DIR / "gemini_data"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CHATS_DIR = CONFIG_DIR / "chats"
 HISTORY_FILE = CONFIG_DIR / "history.json"
+MODEL_CACHE_FILE = CONFIG_DIR / "model_cache.json"
 
-# --- DANH SÁCH MODEL ĐẦY ĐỦ (CẢ CŨ VÀ MỚI) ---
-# Mỗi model có ghi chú (free) hoặc (paid) dựa trên chính sách miễn phí của Google
-# (Tất cả đều có free tier với giới hạn rate, paid khi vượt quota hoặc dùng bill)
-AVAILABLE_MODELS = {
-    # Alias mới nhất (khuyên dùng)
-    "1":  {"id": "gemini-flash-latest",      "name": "Gemini Flash Latest",      "desc": "[free] Luôn trỏ đến model Flash mới nhất, ổn định."},
-    "2":  {"id": "gemini-flash-lite-latest", "name": "Gemini Flash-Lite Latest", "desc": "[free] Bí danh cho phiên bản Flash-Lite mới nhất, tiết kiệm."},
-    # Dòng Gemini 3.x
-    "3":  {"id": "gemini-3.1-flash-lite",    "name": "Gemini 3.1 Flash-Lite",    "desc": "[free] Flash-Lite thế hệ mới, chi phí thấp, tốc độ cao."},
-    "4":  {"id": "gemini-3.1-pro-preview",   "name": "Gemini 3.1 Pro Preview",   "desc": "[free] Bản xem trước Pro mạnh mẽ, dành cho tác vụ phức tạp."},
-    # Dòng Gemini 2.5
-    "5":  {"id": "gemini-2.5-flash",         "name": "Gemini 2.5 Flash",         "desc": "[free] Cân bằng hiệu năng và chi phí, suy luận tốt."},
-    "6":  {"id": "gemini-2.5-pro",           "name": "Gemini 2.5 Pro",           "desc": "[free] Mô hình mạnh nhất hiện tại, code và logic xuất sắc."},
-    # Dòng Gemini 2.0 (cũ hơn nhưng vẫn dùng được)
-    "7":  {"id": "gemini-2.0-flash-exp",     "name": "Gemini 2.0 Flash Exp",     "desc": "[free] Thử nghiệm, phản hồi nhanh, đa phương thức."},
-    # Dòng Gemini 1.5 (ổn định, phổ biến)
-    "8":  {"id": "gemini-1.5-flash",         "name": "Gemini 1.5 Flash",         "desc": "[free] Đa năng, chi phí thấp, phù hợp sản xuất."},
-    "9":  {"id": "gemini-1.5-flash-8b",      "name": "Gemini 1.5 Flash-8B",      "desc": "[free] Phiên bản siêu nhẹ, tốc độ cao, tiết kiệm token."},
-    "10": {"id": "gemini-1.5-pro",           "name": "Gemini 1.5 Pro",           "desc": "[free] Cửa sổ ngữ cảnh 2M token, mạnh mẽ cho tác vụ lớn."},
-    "11": {"id": "gemini-1.5-flash-002",     "name": "Gemini 1.5 Flash-002",     "desc": "[free] Tinh chỉnh, viết code và toán tốt hơn."},
-    "12": {"id": "gemini-1.5-pro-002",       "name": "Gemini 1.5 Pro-002",       "desc": "[free] Bản cải tiến của Pro, suy luận sâu hơn."},
-    # Các model thử nghiệm (experimental)
-    "13": {"id": "gemini-exp-1206",          "name": "Gemini Exp 1206",          "desc": "[free] Thử nghiệm tháng 12/2025, lập luận mạnh."},
-    "14": {"id": "gemini-exp-1121",          "name": "Gemini Exp 1121",          "desc": "[free] Thử nghiệm tháng 11/2025, tiền nhiệm."},
-    "15": {"id": "learnlm-1.5-pro-experimental", "name": "LearnLM 1.5 Pro Exp",   "desc": "[free] Tinh chỉnh cho giáo dục, giải thích dễ hiểu."},
-    # Dòng Gemini 1.0 (cũ, vẫn hỗ trợ)
-    "16": {"id": "gemini-1.0-pro",           "name": "Gemini 1.0 Pro",           "desc": "[free] Thế hệ đầu, ổn định nhưng hạn chế hơn."},
-    "17": {"id": "gemini-1.0-pro-vision",    "name": "Gemini 1.0 Pro Vision",    "desc": "[free] Hỗ trợ ảnh (cũ), nay đã gộp vào 1.5."},
-}
-DEFAULT_MODEL_ID = "gemini-flash-latest"
+DEFAULT_MODEL_ID = "gemini-2.0-flash"  # fallback nếu không fetch được
 
 # ==================== KHỞI TẠO THƯ MỤC ====================
 def init_dirs():
@@ -73,7 +46,7 @@ def load_config():
 def save_config(config):
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
 
-# ==================== QUẢN LÝ API KEY & MODEL ====================
+# ==================== QUẢN LÝ API KEY ====================
 def get_api_key():
     config = load_config()
     if not config.get("api_key"):
@@ -90,40 +63,89 @@ def get_api_key():
             return get_api_key()
     return config["api_key"]
 
-def choose_model():
-    """Hiển thị menu chọn model và cập nhật vào config."""
+# ==================== LẤY DANH SÁCH MODEL ĐỘNG ====================
+def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
+    """Gọi API lấy danh sách model hỗ trợ generateContent. Trả về dict {'1': {'id':..., 'name':..., 'desc':...}}"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = {}
+            idx = 1
+            for model in data.get("models", []):
+                model_id = model["name"].replace("models/", "")
+                if "generateContent" in model.get("supportedActions", []):
+                    # Lấy tên hiển thị đẹp: bỏ tiền tố models/ và viết hoa chữ đầu
+                    display_name = model.get("displayName", model_id)
+                    models[str(idx)] = {
+                        "id": model_id,
+                        "name": display_name,
+                        "desc": f"Supported methods: generateContent"
+                    }
+                    idx += 1
+            if models:
+                # Lưu cache
+                MODEL_CACHE_FILE.write_text(json.dumps(models, indent=2))
+                return models
+        else:
+            print(f"{Fore.YELLOW}⚠️ API trả về lỗi {resp.status_code}, dùng cache nếu có.{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}⚠️ Không thể fetch model: {e}{Style.RESET_ALL}")
+    
+    # Fallback: đọc cache
+    if MODEL_CACHE_FILE.exists():
+        try:
+            cached = json.loads(MODEL_CACHE_FILE.read_text())
+            print(f"{Fore.BLUE}📦 Dùng danh sách model từ cache.{Style.RESET_ALL}")
+            return cached
+        except:
+            pass
+    return None
+
+def get_available_models(api_key: str) -> Dict[str, Dict]:
+    """Trả về dict model, nếu fetch thất bại thì trả về dict tối thiểu với model mặc định."""
+    models = fetch_models_from_api(api_key)
+    if models:
+        return models
+    # Fallback cứng chỉ 1 model quen thuộc
+    return {"1": {"id": DEFAULT_MODEL_ID, "name": DEFAULT_MODEL_ID, "desc": "Fallback model"}}
+
+def choose_model(api_key: str) -> str:
+    """Hiển thị menu chọn model động, trả về model_id được chọn."""
+    models = get_available_models(api_key)
     config = load_config()
     current_model_id = config.get("model", DEFAULT_MODEL_ID)
-
+    
     print(f"\n{Fore.CYAN}{'='*60}")
-    print(f"{Fore.MAGENTA}🤖 CHỌN MODEL GEMINI (Free tier cho tất cả, giới hạn rate)")
+    print(f"{Fore.MAGENTA}🤖 DANH SÁCH MODEL GEMINI (lấy trực tiếp từ Google API)")
     print(f"{Fore.CYAN}{'='*60}")
-
+    
     # Tìm tên model hiện tại
     current_name = current_model_id
-    for model in AVAILABLE_MODELS.values():
-        if model["id"] == current_model_id:
-            current_name = model["name"]
+    for m in models.values():
+        if m["id"] == current_model_id:
+            current_name = m["name"]
             break
     print(f"{Fore.YELLOW}Model hiện tại: {Fore.GREEN}{current_name}{Style.RESET_ALL}\n")
-
-    # Hiển thị danh sách model dạng bảng
+    
+    # Tạo bảng hiển thị
     table = []
-    for key, model in AVAILABLE_MODELS.items():
-        marker = "✅ " if model["id"] == current_model_id else "   "
-        table.append([f"{marker}{key}", model["name"], model["desc"]])
-    print(tabulate(table, headers=["Chọn", "Model", "Mô tả (free/paid)"], tablefmt="rounded_grid"))
-
+    for key, m in models.items():
+        marker = "✅ " if m["id"] == current_model_id else "   "
+        table.append([f"{marker}{key}", m["name"], m["desc"]])
+    print(tabulate(table, headers=["Chọn", "Model ID", "Mô tả"], tablefmt="rounded_grid"))
+    
     choice = input(f"\n{Fore.GREEN}Nhập số để đổi model (Enter để giữ nguyên): {Style.RESET_ALL}").strip()
-
-    if choice in AVAILABLE_MODELS:
-        new_model_id = AVAILABLE_MODELS[choice]["id"]
+    if choice in models:
+        new_model_id = models[choice]["id"]
         config["model"] = new_model_id
         save_config(config)
-        print(f"{Fore.GREEN}✅ Đã đổi sang {AVAILABLE_MODELS[choice]['name']}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}✅ Đã đổi sang {models[choice]['name']}{Style.RESET_ALL}")
         return new_model_id
     else:
-        print(f"{Fore.BLUE}ℹ️ Giữ nguyên model hiện tại.{Style.RESET_ALL}")
+        if choice != "":
+            print(f"{Fore.RED}❌ Lựa chọn không hợp lệ.{Style.RESET_ALL}")
         return current_model_id
 
 # ==================== QUẢN LÝ ĐOẠN CHAT ====================
@@ -213,7 +235,6 @@ def show_history():
 
 # ==================== GỌI GEMINI API ====================
 def call_gemini(api_key, messages, model_id):
-    """Gọi Gemini API với model được chọn."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
     
     contents = []
@@ -244,16 +265,9 @@ def call_gemini(api_key, messages, model_id):
 def chat_loop(chat_name, api_key, model_id):
     messages = load_chat(chat_name)
     
-    # Tìm tên model để hiển thị
-    model_display_name = model_id
-    for model in AVAILABLE_MODELS.values():
-        if model["id"] == model_id:
-            model_display_name = model["name"]
-            break
-    
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"{Fore.MAGENTA}💬 Đang chat: {Fore.WHITE}{chat_name}")
-    print(f"{Fore.BLUE}📡 Model: {Fore.YELLOW}{model_display_name}")
+    print(f"{Fore.BLUE}📡 Model: {Fore.YELLOW}{model_id}")
     print(f"{Fore.BLUE}📝 Lệnh: /menu | /new | /delete | /history | /model | /quit")
     print(f"{Fore.CYAN}{'='*60}\n")
     
@@ -288,7 +302,7 @@ def chat_loop(chat_name, api_key, model_id):
                 show_history()
                 continue
             elif cmd == "/model":
-                new_model_id = choose_model()
+                new_model_id = choose_model(api_key)
                 if new_model_id != model_id:
                     model_id = new_model_id
                     config = load_config()
@@ -327,12 +341,12 @@ def main_menu():
     
     while True:
         print(f"\n{Fore.CYAN}{'='*60}")
-        print(f"{Fore.MAGENTA}🤖 GEMINI CLI CHATBOT (Đầy đủ model)")
+        print(f"{Fore.MAGENTA}🤖 GEMINI CLI CHATBOT (Danh sách model động)")
         print(f"{Fore.CYAN}{'='*60}")
         print(f"{Fore.GREEN}1. {Fore.WHITE}Tiếp tục chat: {Fore.YELLOW}{current_chat}")
         print(f"{Fore.GREEN}2. {Fore.WHITE}Chọn / Tạo đoạn chat khác")
         print(f"{Fore.GREEN}3. {Fore.WHITE}Xem lịch sử các đoạn chat")
-        print(f"{Fore.GREEN}4. {Fore.WHITE}Chọn Model Gemini")
+        print(f"{Fore.GREEN}4. {Fore.WHITE}Chọn Model Gemini (tự động cập nhật từ Google)")
         print(f"{Fore.GREEN}5. {Fore.WHITE}Đổi API key")
         print(f"{Fore.GREEN}6. {Fore.WHITE}Thoát")
         print(f"{Fore.CYAN}{'='*60}")
@@ -397,7 +411,7 @@ def main_menu():
         elif choice == "3":
             show_history()
         elif choice == "4":
-            current_model = choose_model()
+            current_model = choose_model(api_key)
         elif choice == "5":
             new_key = input(f"{Fore.GREEN}Nhập API key mới: {Style.RESET_ALL}").strip()
             if new_key:
