@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Gemini CLI Chatbot - Đa ngôn ngữ (English/Việt), tự động cập nhật danh sách model.
-Chỉ chọn ngôn ngữ MỘT LẦN, lưu vào config. Có hiệu ứng loading, giao diện đẹp.
-Yêu cầu: pip install requests colorama
+Gemini CLI Chatbot - Extended with Code Generation & Execution
+Phiên bản mở rộng: hỗ trợ viết code và chạy code (Python, JS, Ruby, Bash...)
 """
 
 import json
@@ -10,6 +9,10 @@ import sys
 import time
 import threading
 import itertools
+import subprocess
+import tempfile
+import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, List, Any
@@ -31,8 +34,23 @@ MODEL_CACHE_FILE = DATA_DIR / "model_cache.json"
 DEFAULT_MODEL_ID = "gemini-2.0-flash"
 
 # ==================== TỪ ĐIỂN ĐA NGÔN NGỮ ====================
+# Thêm các key mới cho tính năng code
 TEXTS = {
     "en": {
+        # ... (giữ nguyên toàn bộ các key cũ)
+        # Bổ sung thêm:
+        "code_help": "Usage: /code <language> <description>\nExample: /code python Calculate factorial of 5",
+        "code_generating": "📝 Generating code for {}...",
+        "code_generated": "✅ Generated code:",
+        "code_run_prompt": "Run this code? (y/N): ",
+        "code_running": "🚀 Running...",
+        "code_output": "📤 Output:",
+        "code_error": "❌ Error:",
+        "code_not_found": "❌ No code block found in response.",
+        "code_unsupported": "❌ Unsupported language: {}. Supported: python, javascript, js, ruby, bash, sh.",
+        "code_runtime_missing": "⚠️  {} not installed. Install it to run {} code.",
+        "code_saved": "💾 Code saved to temporary file: {}",
+        # Định nghĩa lại đầy đủ tất cả các key cũ để tránh lỗi
         "data_dir": "📁 Data saved at: {}",
         "no_api_key": "🔑 Gemini API key not found!",
         "get_api_key_url": "Get your API key at: https://aistudio.google.com/apikey\n",
@@ -58,10 +76,9 @@ TEXTS = {
         "cancel_switch": "❌ Switch cancelled.",
         "invalid_choice": "❌ Invalid choice.",
         "keep_model": "Keeping current model.",
-        # Chat loop
         "chatting": "💬 Chat: {}",
         "model_label": "📡 Model: {}",
-        "commands_label": "📝 Commands: /menu | /new | /delete | /history | /model | /quit",
+        "commands_label": "📝 Commands: /menu | /new | /delete | /history | /model | /code | /quit",
         "history_label": "--- Full history ({} messages) ---",
         "user_prefix": "👤 You",
         "gemini_prefix": "🤖 Gemini",
@@ -75,7 +92,6 @@ TEXTS = {
         "history_title": "📜 CHAT HISTORY",
         "goodbye": "👋 Goodbye!",
         "model_changed": "✅ Model changed, you can continue chatting.",
-        # Main menu
         "main_title": "🤖 GEMINI CLI CHATBOT",
         "menu_continue": "1. Continue chat: {}",
         "menu_switch_chat": "2. Select / Create another chat",
@@ -97,7 +113,6 @@ TEXTS = {
         "api_key_updated": "✅ API key updated.",
         "invalid_api_key": "Invalid API key.",
         "error_unexpected": "Unexpected error: {}",
-        # Language selection
         "lang_select_title": "🌐 Select language / Chọn ngôn ngữ:",
         "lang_option_en": "1. English",
         "lang_option_vi": "2. Tiếng Việt",
@@ -108,6 +123,18 @@ TEXTS = {
         "thinking": "Thinking...",
     },
     "vi": {
+        "code_help": "Cách dùng: /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
+        "code_generating": "📝 Đang tạo code {}...",
+        "code_generated": "✅ Code đã tạo:",
+        "code_run_prompt": "Chạy đoạn code này? (y/N): ",
+        "code_running": "🚀 Đang chạy...",
+        "code_output": "📤 Kết quả:",
+        "code_error": "❌ Lỗi:",
+        "code_not_found": "❌ Không tìm thấy khối code trong phản hồi.",
+        "code_unsupported": "❌ Ngôn ngữ không hỗ trợ: {}. Hỗ trợ: python, javascript, js, ruby, bash, sh.",
+        "code_runtime_missing": "⚠️  {} chưa được cài đặt. Hãy cài để chạy code {}.",
+        "code_saved": "💾 Code đã lưu vào file tạm: {}",
+        # Các key cũ giữ nguyên
         "data_dir": "📁 Dữ liệu lưu tại: {}",
         "no_api_key": "🔑 Chưa có API key Gemini!",
         "get_api_key_url": "Bạn có thể lấy API key tại: https://aistudio.google.com/apikey\n",
@@ -133,10 +160,9 @@ TEXTS = {
         "cancel_switch": "❌ Hủy chuyển đổi.",
         "invalid_choice": "❌ Lựa chọn không hợp lệ.",
         "keep_model": "Giữ nguyên model hiện tại.",
-        # Chat loop
         "chatting": "💬 Đoạn chat: {}",
         "model_label": "📡 Model: {}",
-        "commands_label": "📝 Lệnh: /menu | /new | /delete | /history | /model | /quit",
+        "commands_label": "📝 Lệnh: /menu | /new | /delete | /history | /model | /code | /quit",
         "history_label": "--- Toàn bộ lịch sử ({} tin nhắn) ---",
         "user_prefix": "👤 Bạn",
         "gemini_prefix": "🤖 Gemini",
@@ -150,7 +176,6 @@ TEXTS = {
         "history_title": "📜 LỊCH SỬ CÁC ĐOẠN CHAT",
         "goodbye": "👋 Tạm biệt!",
         "model_changed": "✅ Đã đổi model, hãy tiếp tục chat.",
-        # Main menu
         "main_title": "🤖 GEMINI CLI CHATBOT",
         "menu_continue": "1. Tiếp tục chat: {}",
         "menu_switch_chat": "2. Chọn / Tạo đoạn chat khác",
@@ -172,7 +197,6 @@ TEXTS = {
         "api_key_updated": "✅ Đã cập nhật API key.",
         "invalid_api_key": "API key không hợp lệ.",
         "error_unexpected": "Lỗi không mong muốn: {}",
-        # Language selection
         "lang_select_title": "🌐 Chọn ngôn ngữ / Select language:",
         "lang_option_en": "1. English",
         "lang_option_vi": "2. Tiếng Việt",
@@ -186,7 +210,6 @@ TEXTS = {
 
 # ==================== TIỆN ÍCH HIỂN THỊ ====================
 def print_box(text: str, color=Fore.CYAN, width=60):
-    """In khung đẹp quanh text."""
     print(f"{color}╔{'═'*width}╗")
     for line in text.splitlines():
         print(f"║ {line}{' '*(width-1-len(line))}║")
@@ -196,33 +219,29 @@ def print_separator(char="─", color=Fore.CYAN, width=60):
     print(f"{color}{char*width}{Style.RESET_ALL}")
 
 def loading_animation(stop_event, prefix="Thinking"):
-    """Hiển thị hiệu ứng chờ."""
     for c in itertools.cycle('|/-\\'):
         if stop_event.is_set():
             break
         sys.stdout.write(f"\r{Fore.YELLOW}{prefix} {c}{Style.RESET_ALL}")
         sys.stdout.flush()
         time.sleep(0.1)
-    sys.stdout.write("\r" + " "* (len(prefix)+2) + "\r")  # Xóa dòng loading
+    sys.stdout.write("\r" + " "* (len(prefix)+2) + "\r")
 
 # ==================== LỚP CHATBOT CHÍNH ====================
 class GeminiChatbot:
     def __init__(self):
-        self.lang = "vi"  # Mặc định, sẽ ghi đè sau khi load config
+        self.lang = "vi"
         self.config = {}
         self.api_key = ""
         self.current_model = DEFAULT_MODEL_ID
         self.current_chat = "default"
 
-        # Đảm bảo thư mục tồn tại
         DATA_DIR.mkdir(exist_ok=True)
         CHATS_DIR.mkdir(exist_ok=True)
         if not HISTORY_FILE.exists():
             HISTORY_FILE.write_text(json.dumps([], indent=2), encoding="utf-8")
 
-    # ==================== TIỆN ÍCH ĐA NGÔN NGỮ ====================
     def t(self, key: str, *args) -> str:
-        """Trả về chuỗi theo ngôn ngữ hiện tại, có thể format."""
         text = TEXTS.get(self.lang, TEXTS["vi"]).get(key, key)
         if args:
             return text.format(*args)
@@ -234,7 +253,6 @@ class GeminiChatbot:
             self.config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         else:
             self.config = {}
-        # Cập nhật các thuộc tính từ config
         self.lang = self.config.get("language", "vi")
         self.api_key = self.config.get("api_key", "")
         self.current_model = self.config.get("model", DEFAULT_MODEL_ID)
@@ -249,9 +267,7 @@ class GeminiChatbot:
         })
         CONFIG_FILE.write_text(json.dumps(self.config, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # ==================== THIẾT LẬP NGÔN NGỮ ====================
     def initial_language_setup(self):
-        """Hỏi ngôn ngữ lần đầu nếu chưa có trong config."""
         if self.lang not in ("en", "vi"):
             print("\n" + "=" * 60)
             print("🌐 Select language / Chọn ngôn ngữ:")
@@ -262,7 +278,6 @@ class GeminiChatbot:
             self.save_config()
 
     def change_language(self):
-        """Đổi ngôn ngữ từ menu."""
         print(f"\n{Fore.CYAN}{self.t('lang_select_title')}{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{self.t('lang_option_en')}{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{self.t('lang_option_vi')}{Style.RESET_ALL}")
@@ -278,7 +293,6 @@ class GeminiChatbot:
             return
         self.save_config()
 
-    # ==================== QUẢN LÝ API KEY ====================
     def get_api_key(self):
         if not self.api_key:
             print(f"\n{Fore.YELLOW}{self.t('no_api_key')}{Style.RESET_ALL}")
@@ -293,7 +307,6 @@ class GeminiChatbot:
                 return self.get_api_key()
         return self.api_key
 
-    # ==================== LẤY DANH SÁCH MODEL ====================
     def fetch_models_from_api(self) -> Optional[Dict[str, Dict]]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
         print(f"{Fore.CYAN}{self.t('fetching_models')}{Style.RESET_ALL}")
@@ -334,7 +347,6 @@ class GeminiChatbot:
             t.join()
             print(f"{Fore.YELLOW}{self.t('fetch_error', e)}{Style.RESET_ALL}")
 
-        # Thử dùng cache
         if MODEL_CACHE_FILE.exists():
             try:
                 cache_data = json.loads(MODEL_CACHE_FILE.read_text(encoding="utf-8"))
@@ -361,14 +373,11 @@ class GeminiChatbot:
         print(f"\n{Fore.CYAN}{'='*60}")
         print(f"{Fore.MAGENTA}{self.t('model_list_title')}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{'='*60}")
-
         for key, m in models.items():
             marker = "✅ " if m["id"] == self.current_model else "   "
             print(f"{Fore.GREEN}{marker}{key}. {Fore.WHITE}{m['name']}")
-
         print(f"\n{Fore.YELLOW}{self.t('pick_number')}{Style.RESET_ALL}")
         choice = input(f"{Fore.GREEN}{self.t('choice_prompt')}{Style.RESET_ALL}").strip()
-
         if choice in models:
             selected = models[choice]
             print(f"\n{Fore.CYAN}{'='*60}")
@@ -383,7 +392,6 @@ class GeminiChatbot:
                 else:
                     print(f"{Fore.YELLOW}{self.t('desc_prefix', part)}{Style.RESET_ALL}")
             print(f"{Fore.CYAN}{'='*60}")
-
             confirm = input(f"\n{Fore.GREEN}{self.t('confirm_switch')}{Style.RESET_ALL}").strip().lower()
             if confirm == 'y':
                 self.current_model = selected["id"]
@@ -394,7 +402,6 @@ class GeminiChatbot:
         elif choice != "":
             print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
 
-    # ==================== QUẢN LÝ ĐOẠN CHAT ====================
     def _chat_file_path(self, chat_name: str) -> Path:
         safe_name = "".join(c for c in chat_name if c.isalnum() or c in "._-")
         if not safe_name:
@@ -479,7 +486,6 @@ class GeminiChatbot:
             print(f"      {Fore.BLUE}📝 {msg_count} messages | 🕐 {last_used}")
         print(f"{Fore.CYAN}{'='*60}\n")
 
-    # ==================== GỌI GEMINI API ====================
     def call_gemini(self, messages: list) -> str:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.current_model}:generateContent?key={self.api_key}"
         contents = []
@@ -487,12 +493,9 @@ class GeminiChatbot:
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
         payload = {"contents": contents}
-
-        # Hiệu ứng chờ
         stop_event = threading.Event()
         t = threading.Thread(target=loading_animation, args=(stop_event, self.t("thinking")))
         t.start()
-
         try:
             response = requests.post(url, json=payload, timeout=30)
             stop_event.set()
@@ -519,7 +522,92 @@ class GeminiChatbot:
             t.join()
             return f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
-    # ==================== VÒNG LẶP CHAT ====================
+    # ==================== TÍNH NĂNG VIẾT & CHẠY CODE ====================
+    def execute_code(self, language: str, code: str) -> str:
+        """Thực thi code tùy theo ngôn ngữ, trả về output."""
+        # Mapping ngôn ngữ -> file extension và command
+        lang_map = {
+            "python": ("py", ["python3", "-c", code]),
+            "javascript": ("js", ["node", "-e", code]),
+            "js": ("js", ["node", "-e", code]),
+            "ruby": ("rb", ["ruby", "-e", code]),
+            "bash": ("sh", ["bash", "-c", code]),
+            "sh": ("sh", ["bash", "-c", code])
+        }
+        if language not in lang_map:
+            return f"Unsupported language: {language}"
+        ext, cmd = lang_map[language]
+        # Kiểm tra runtime có tồn tại không (ngoại trừ python3, node, ruby, bash)
+        runtime = cmd[0]
+        if not shutil.which(runtime):
+            return self.t("code_runtime_missing", runtime, language)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            out = result.stdout
+            if result.stderr:
+                out += f"\n{Fore.RED}STDERR:\n{result.stderr}{Style.RESET_ALL}"
+            return out.strip() or "(no output)"
+        except subprocess.TimeoutExpired:
+            return "❌ Code execution timed out (30s)"
+        except Exception as e:
+            return f"❌ Execution error: {e}"
+
+    def handle_code_command(self, args: str):
+        """Xử lý lệnh /code <language> <description>"""
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            print(f"{Fore.YELLOW}{self.t('code_help')}{Style.RESET_ALL}")
+            return
+        language = parts[0].lower()
+        description = parts[1]
+
+        supported = ["python", "javascript", "js", "ruby", "bash", "sh"]
+        if language not in supported:
+            print(f"{Fore.RED}{self.t('code_unsupported', language)}{Style.RESET_ALL}")
+            return
+
+        # Tạo prompt để Gemini viết code
+        prompt = f"Write a {language} program that {description}. Only output the code, no explanation."
+        print(f"{Fore.CYAN}{self.t('code_generating', language)}...{Style.RESET_ALL}")
+
+        # Gọi Gemini với prompt đơn giản (không lưu vào lịch sử chat chính)
+        messages = [{"role": "user", "content": prompt}]
+        response = self.call_gemini(messages)
+        # Tách code block nếu có
+        code = self.extract_code_from_response(response)
+        if not code:
+            print(f"{Fore.RED}{self.t('code_not_found')}{Style.RESET_ALL}")
+            return
+
+        print(f"{Fore.GREEN}{self.t('code_generated')}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'─'*40}{Style.RESET_ALL}")
+        print(code)
+        print(f"{Fore.CYAN}{'─'*40}{Style.RESET_ALL}")
+
+        # Hỏi có chạy không
+        run_confirm = input(f"{Fore.YELLOW}{self.t('code_run_prompt')}{Style.RESET_ALL}").strip().lower()
+        if run_confirm != 'y':
+            return
+
+        print(f"{Fore.BLUE}{self.t('code_running')}{Style.RESET_ALL}")
+        output = self.execute_code(language, code)
+        print(f"{Fore.GREEN}{self.t('code_output')}{Style.RESET_ALL}")
+        print(output)
+        print()
+
+    def extract_code_from_response(self, text: str) -> Optional[str]:
+        """Trích xuất code từ phản hồi của Gemini (có thể trong ``` blocks)."""
+        import re
+        # Tìm code block với hoặc không có ngôn ngữ
+        pattern = r"```(?:\w+)?\n(.*?)```"
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            return "\n".join(matches)  # Ghép nếu nhiều block
+        # Nếu không có code block, trả về toàn bộ text (có thể là code thuần)
+        # Lọc bỏ các dòng giải thích ngắn?
+        return text.strip()
+
     def chat_loop(self):
         messages = self.load_messages(self.current_chat)
         print(f"\n{Fore.CYAN}{'='*60}")
@@ -532,7 +620,6 @@ class GeminiChatbot:
             print(f"{Fore.YELLOW}{self.t('history_label', len(messages)//2)}{Style.RESET_ALL}")
             for msg in messages:
                 role_icon = f"{Fore.GREEN}{self.t('user_prefix')}" if msg["role"] == "user" else f"{Fore.MAGENTA}{self.t('gemini_prefix')}"
-                # Hiển thị nội dung với thụt dòng đẹp
                 content = msg['content'].replace('\n', '\n           ')
                 print(f"{role_icon}: {content}")
             print()
@@ -544,7 +631,12 @@ class GeminiChatbot:
                     continue
 
                 cmd = user_input.lower()
-                if cmd in ["/menu", "/back"]:
+                if cmd.startswith("/code"):
+                    # Tách phần tham số
+                    args = user_input[5:].strip()  # Bỏ "/code"
+                    self.handle_code_command(args)
+                    continue
+                elif cmd in ["/menu", "/back"]:
                     self.update_history(self.current_chat)
                     return "menu"
                 elif cmd == "/new":
@@ -577,14 +669,11 @@ class GeminiChatbot:
                 self.update_history(self.current_chat)
                 return "quit"
 
-    # ==================== MENU CHÍNH ====================
+    # Main menu giữ nguyên như cũ, chỉ thêm dòng lệnh nhắc (đã update trong TEXTS)
     def main_menu(self):
-        # Bước 1: Load config và thiết lập ngôn ngữ
         self.load_config()
-        self.initial_language_setup()  # Hỏi lần đầu nếu cần
+        self.initial_language_setup()
         print(f"{Fore.BLUE}{self.t('data_dir', DATA_DIR)}{Style.RESET_ALL}")
-
-        # Bước 2: Lấy API key
         if not self.get_api_key():
             return
 
