@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Gemini CLI Chatbot - Phiên bản cập nhật
-Hỗ trợ các model Gemini mới nhất, dùng requests và colorama.
+Gemini CLI Chatbot - Đầy đủ model (cả cũ và mới), có ghi chú free/paid.
+Dùng requests và colorama, lưu dữ liệu tại thư mục hiện tại.
 """
 
 import json
@@ -26,13 +26,34 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 CHATS_DIR = CONFIG_DIR / "chats"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 
-# --- DANH SÁCH MODEL ĐƯỢC CẬP NHẬT (DỰA TRÊN TÀI LIỆU MỚI NHẤT) ---
+# --- DANH SÁCH MODEL ĐẦY ĐỦ (CẢ CŨ VÀ MỚI) ---
+# Mỗi model có ghi chú (free) hoặc (paid) dựa trên chính sách miễn phí của Google
+# (Tất cả đều có free tier với giới hạn rate, paid khi vượt quota hoặc dùng bill)
 AVAILABLE_MODELS = {
-    "1": {"id": "gemini-flash-latest", "name": "Gemini Flash Latest", "desc": "[Khuyên dùng] Bí danh luôn trỏ đến model Flash mới nhất."},
-    "2": {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite", "desc": "Tiết kiệm chi phí nhất, cho tác vụ tần suất cao, dung lượng nhẹ."},
-    "3": {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "desc": "Bản xem trước mới nhất, mạnh mẽ cho tác vụ phức tạp."},
-    "4": {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "desc": "Cân bằng hiệu năng, chi phí và tốc độ, có khả năng suy luận."},
-    "5": {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "desc": "Mạnh mẽ nhất, lập luận sâu và viết code phức tạp."},
+    # Alias mới nhất (khuyên dùng)
+    "1":  {"id": "gemini-flash-latest",      "name": "Gemini Flash Latest",      "desc": "[free] Luôn trỏ đến model Flash mới nhất, ổn định."},
+    "2":  {"id": "gemini-flash-lite-latest", "name": "Gemini Flash-Lite Latest", "desc": "[free] Bí danh cho phiên bản Flash-Lite mới nhất, tiết kiệm."},
+    # Dòng Gemini 3.x
+    "3":  {"id": "gemini-3.1-flash-lite",    "name": "Gemini 3.1 Flash-Lite",    "desc": "[free] Flash-Lite thế hệ mới, chi phí thấp, tốc độ cao."},
+    "4":  {"id": "gemini-3.1-pro-preview",   "name": "Gemini 3.1 Pro Preview",   "desc": "[free] Bản xem trước Pro mạnh mẽ, dành cho tác vụ phức tạp."},
+    # Dòng Gemini 2.5
+    "5":  {"id": "gemini-2.5-flash",         "name": "Gemini 2.5 Flash",         "desc": "[free] Cân bằng hiệu năng và chi phí, suy luận tốt."},
+    "6":  {"id": "gemini-2.5-pro",           "name": "Gemini 2.5 Pro",           "desc": "[free] Mô hình mạnh nhất hiện tại, code và logic xuất sắc."},
+    # Dòng Gemini 2.0 (cũ hơn nhưng vẫn dùng được)
+    "7":  {"id": "gemini-2.0-flash-exp",     "name": "Gemini 2.0 Flash Exp",     "desc": "[free] Thử nghiệm, phản hồi nhanh, đa phương thức."},
+    # Dòng Gemini 1.5 (ổn định, phổ biến)
+    "8":  {"id": "gemini-1.5-flash",         "name": "Gemini 1.5 Flash",         "desc": "[free] Đa năng, chi phí thấp, phù hợp sản xuất."},
+    "9":  {"id": "gemini-1.5-flash-8b",      "name": "Gemini 1.5 Flash-8B",      "desc": "[free] Phiên bản siêu nhẹ, tốc độ cao, tiết kiệm token."},
+    "10": {"id": "gemini-1.5-pro",           "name": "Gemini 1.5 Pro",           "desc": "[free] Cửa sổ ngữ cảnh 2M token, mạnh mẽ cho tác vụ lớn."},
+    "11": {"id": "gemini-1.5-flash-002",     "name": "Gemini 1.5 Flash-002",     "desc": "[free] Tinh chỉnh, viết code và toán tốt hơn."},
+    "12": {"id": "gemini-1.5-pro-002",       "name": "Gemini 1.5 Pro-002",       "desc": "[free] Bản cải tiến của Pro, suy luận sâu hơn."},
+    # Các model thử nghiệm (experimental)
+    "13": {"id": "gemini-exp-1206",          "name": "Gemini Exp 1206",          "desc": "[free] Thử nghiệm tháng 12/2025, lập luận mạnh."},
+    "14": {"id": "gemini-exp-1121",          "name": "Gemini Exp 1121",          "desc": "[free] Thử nghiệm tháng 11/2025, tiền nhiệm."},
+    "15": {"id": "learnlm-1.5-pro-experimental", "name": "LearnLM 1.5 Pro Exp",   "desc": "[free] Tinh chỉnh cho giáo dục, giải thích dễ hiểu."},
+    # Dòng Gemini 1.0 (cũ, vẫn hỗ trợ)
+    "16": {"id": "gemini-1.0-pro",           "name": "Gemini 1.0 Pro",           "desc": "[free] Thế hệ đầu, ổn định nhưng hạn chế hơn."},
+    "17": {"id": "gemini-1.0-pro-vision",    "name": "Gemini 1.0 Pro Vision",    "desc": "[free] Hỗ trợ ảnh (cũ), nay đã gộp vào 1.5."},
 }
 DEFAULT_MODEL_ID = "gemini-flash-latest"
 
@@ -75,7 +96,7 @@ def choose_model():
     current_model_id = config.get("model", DEFAULT_MODEL_ID)
 
     print(f"\n{Fore.CYAN}{'='*60}")
-    print(f"{Fore.MAGENTA}🤖 CHỌN MODEL GEMINI")
+    print(f"{Fore.MAGENTA}🤖 CHỌN MODEL GEMINI (Free tier cho tất cả, giới hạn rate)")
     print(f"{Fore.CYAN}{'='*60}")
 
     # Tìm tên model hiện tại
@@ -91,7 +112,7 @@ def choose_model():
     for key, model in AVAILABLE_MODELS.items():
         marker = "✅ " if model["id"] == current_model_id else "   "
         table.append([f"{marker}{key}", model["name"], model["desc"]])
-    print(tabulate(table, headers=["Chọn", "Model", "Mô tả"], tablefmt="rounded_grid"))
+    print(tabulate(table, headers=["Chọn", "Model", "Mô tả (free/paid)"], tablefmt="rounded_grid"))
 
     choice = input(f"\n{Fore.GREEN}Nhập số để đổi model (Enter để giữ nguyên): {Style.RESET_ALL}").strip()
 
@@ -306,7 +327,7 @@ def main_menu():
     
     while True:
         print(f"\n{Fore.CYAN}{'='*60}")
-        print(f"{Fore.MAGENTA}🤖 GEMINI CLI CHATBOT")
+        print(f"{Fore.MAGENTA}🤖 GEMINI CLI CHATBOT (Đầy đủ model)")
         print(f"{Fore.CYAN}{'='*60}")
         print(f"{Fore.GREEN}1. {Fore.WHITE}Tiếp tục chat: {Fore.YELLOW}{current_chat}")
         print(f"{Fore.GREEN}2. {Fore.WHITE}Chọn / Tạo đoạn chat khác")
