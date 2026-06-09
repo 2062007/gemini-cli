@@ -9,16 +9,15 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional
 
 try:
     import requests
     from colorama import init, Fore, Style, Back
-    from tabulate import tabulate
     init(autoreset=True)
 except ImportError as e:
     print(f"Thiếu thư viện: {e}")
-    print("Vui lòng cài đặt: pip install requests colorama tabulate")
+    print("Vui lòng cài đặt: pip install requests colorama")
     sys.exit(1)
 
 # ==================== CẤU HÌNH ====================
@@ -29,7 +28,6 @@ CHATS_DIR = CONFIG_DIR / "chats"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 MODEL_CACHE_FILE = CONFIG_DIR / "model_cache.json"
 
-# Model mặc định (dùng khi không fetch được danh sách từ API)
 DEFAULT_MODEL_ID = "gemini-2.0-flash"
 
 # ==================== KHỞI TẠO THƯ MỤC ====================
@@ -65,12 +63,9 @@ def get_api_key():
             return get_api_key()
     return config["api_key"]
 
-# ==================== LẤY DANH SÁCH MODEL ĐỘNG (CHÍNH XÁC) ====================
+# ==================== LẤY DANH SÁCH MODEL ĐỘNG ====================
 def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
-    """
-    Gọi API lấy danh sách model hỗ trợ generateContent.
-    Dựa theo đúng tài liệu Google: dùng field 'supportedGenerationMethods'.
-    """
+    """Gọi API lấy danh sách model hỗ trợ generateContent."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     print(f"{Fore.CYAN}🔄 Đang tải danh sách model từ Google API...{Style.RESET_ALL}")
     
@@ -80,79 +75,45 @@ def fetch_models_from_api(api_key: str) -> Optional[Dict[str, Dict]]:
             data = resp.json()
             models = {}
             idx = 1
-            model_list = data.get("models", [])
-            
-            if not model_list:
-                print(f"{Fore.YELLOW}⚠️ API trả về danh sách model rỗng.{Style.RESET_ALL}")
-                return None
-                
-            for model in model_list:
-                # Lấy danh sách các methods mà model hỗ trợ
-                supported_methods = model.get("supportedGenerationMethods", [])
-                
-                # Chỉ lấy các model có hỗ trợ generateContent
-                if "generateContent" in supported_methods:
+            for model in data.get("models", []):
+                if "generateContent" in model.get("supportedGenerationMethods", []):
                     model_id = model["name"].replace("models/", "")
                     display_name = model.get("displayName", model_id)
-                    
-                    # Tạo mô tả ngắn gọn từ thông tin model
                     desc_parts = []
                     if model.get("description"):
-                        desc_parts.append(model.get("description")[:50])
+                        desc_parts.append(model.get("description")[:60])
                     if model.get("inputTokenLimit"):
                         desc_parts.append(f"Input: {model.get('inputTokenLimit'):,} tokens")
-                    if supported_methods:
-                        desc_parts.append(f"Supports: {', '.join(supported_methods)}")
-                    
+                    desc_parts.append(f"Supports: generateContent")
                     models[str(idx)] = {
                         "id": model_id,
                         "name": display_name,
-                        "desc": " | ".join(desc_parts) if desc_parts else "Hỗ trợ generateContent"
+                        "desc": " | ".join(desc_parts)
                     }
                     idx += 1
-                    
             if models:
-                # Lưu cache kèm timestamp
-                cache_data = {
-                    "timestamp": time.time(),
-                    "models": models
-                }
+                cache_data = {"timestamp": time.time(), "models": models}
                 MODEL_CACHE_FILE.write_text(json.dumps(cache_data, indent=2))
                 print(f"{Fore.GREEN}✅ Đã tìm thấy {len(models)} model hỗ trợ chat.{Style.RESET_ALL}")
                 return models
-            else:
-                print(f"{Fore.YELLOW}⚠️ Không tìm thấy model nào hỗ trợ 'generateContent'.{Style.RESET_ALL}")
-                return None
-        else:
-            print(f"{Fore.YELLOW}⚠️ API trả về lỗi {resp.status_code}: {resp.text[:100]}{Style.RESET_ALL}")
-            return None
-    except requests.exceptions.Timeout:
-        print(f"{Fore.YELLOW}⚠️ Timeout khi gọi API lấy danh sách model.{Style.RESET_ALL}")
     except Exception as e:
-        print(f"{Fore.YELLOW}⚠️ Lỗi kết nối: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}⚠️ Lỗi fetch: {e}{Style.RESET_ALL}")
     
-    # Fallback: đọc cache nếu có (chỉ dùng cache không quá 24 giờ)
     if MODEL_CACHE_FILE.exists():
         try:
             cache_data = json.loads(MODEL_CACHE_FILE.read_text())
-            # Kiểm tra cache có còn mới không (dưới 24 giờ)
             if time.time() - cache_data.get("timestamp", 0) < 86400:
                 print(f"{Fore.BLUE}📦 Dùng danh sách model từ cache.{Style.RESET_ALL}")
                 return cache_data.get("models")
-            else:
-                print(f"{Fore.BLUE}📦 Cache đã cũ, hãy kiểm tra kết nối mạng để cập nhật.{Style.RESET_ALL}")
         except:
             pass
     return None
 
 def get_available_models(api_key: str) -> Dict[str, Dict]:
-    """Trả về dict model, nếu fetch thất bại thì dùng danh sách dự phòng."""
     models = fetch_models_from_api(api_key)
     if models:
         return models
-    
-    print(f"{Fore.YELLOW}⚠️ Không thể lấy danh sách model từ API. Dùng danh sách dự phòng.{Style.RESET_ALL}")
-    # Danh sách dự phòng (các model phổ biến, đảm bảo hoạt động)
+    print(f"{Fore.YELLOW}⚠️ Dùng danh sách dự phòng.{Style.RESET_ALL}")
     return {
         "1": {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "desc": "Model phổ biến, nhanh, ổn định."},
         "2": {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "desc": "Model nhẹ, tiết kiệm, ổn định."},
@@ -160,45 +121,55 @@ def get_available_models(api_key: str) -> Dict[str, Dict]:
     }
 
 def choose_model(api_key: str) -> str:
-    """Hiển thị menu chọn model động, trả về model_id được chọn."""
+    """Hiển thị danh sách model rút gọn, khi chọn mới hiện chi tiết và xác nhận."""
     models = get_available_models(api_key)
     config = load_config()
     current_model_id = config.get("model", DEFAULT_MODEL_ID)
-    
+
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"{Fore.MAGENTA}🤖 DANH SÁCH MODEL GEMINI (Lấy từ Google API)")
     print(f"{Fore.CYAN}{'='*60}")
-    
-    # Tìm tên model hiện tại
-    current_name = current_model_id
-    for m in models.values():
-        if m["id"] == current_model_id:
-            current_name = m["name"]
-            break
-    print(f"{Fore.YELLOW}✅ Model hiện tại: {Fore.GREEN}{current_name}{Style.RESET_ALL}\n")
-    
-    # Tạo bảng hiển thị
-    table = []
+
+    # Hiển thị danh sách rút gọn: chỉ số và tên
     for key, m in models.items():
         marker = "✅ " if m["id"] == current_model_id else "   "
-        table.append([f"{marker}{key}", m["name"], m["desc"]])
-    
-    # Sử dụng tabulate để hiển thị bảng đẹp
-    print(tabulate(table, headers=["Chọn", "Model ID", "Mô tả"], tablefmt="rounded_grid"))
-    
-    choice = input(f"\n{Fore.GREEN}Nhập số để đổi model (Enter để giữ nguyên): {Style.RESET_ALL}").strip()
+        print(f"{Fore.GREEN}{marker}{key}. {Fore.WHITE}{m['name']}")
+
+    print(f"\n{Fore.YELLOW}👉 Nhập số để xem chi tiết và chọn (Enter để giữ nguyên){Style.RESET_ALL}")
+    choice = input(f"{Fore.GREEN}Lựa chọn: {Style.RESET_ALL}").strip()
+
     if choice in models:
-        new_model_id = models[choice]["id"]
-        config["model"] = new_model_id
-        save_config(config)
-        print(f"{Fore.GREEN}✅ Đã đổi sang {models[choice]['name']}{Style.RESET_ALL}")
-        return new_model_id
+        selected = models[choice]
+        # Hiển thị chi tiết model được chọn
+        print(f"\n{Fore.CYAN}{'='*60}")
+        print(f"{Fore.MAGENTA}📌 THÔNG TIN MODEL: {selected['name']}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*60}")
+        print(f"{Fore.YELLOW}🆔 ID:{Style.RESET_ALL} {selected['id']}")
+        # Tách các phần mô tả để hiển thị đẹp
+        for part in selected['desc'].split(' | '):
+            if part.startswith("Input:"):
+                print(f"{Fore.YELLOW}📥 {part}{Style.RESET_ALL}")
+            elif part.startswith("Supports:"):
+                print(f"{Fore.YELLOW}⚙️ {part}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}📝 {part}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*60}")
+
+        confirm = input(f"\n{Fore.GREEN}Bạn có muốn chuyển sang model này không? (y/N): {Style.RESET_ALL}").strip().lower()
+        if confirm == 'y':
+            config["model"] = selected["id"]
+            save_config(config)
+            print(f"{Fore.GREEN}✅ Đã đổi sang {selected['name']}{Style.RESET_ALL}")
+            return selected["id"]
+        else:
+            print(f"{Fore.YELLOW}❌ Hủy chuyển đổi.{Style.RESET_ALL}")
+            return current_model_id
     else:
         if choice != "":
             print(f"{Fore.RED}❌ Lựa chọn không hợp lệ.{Style.RESET_ALL}")
         return current_model_id
 
-# ==================== QUẢN LÝ ĐOẠN CHAT (GIỮ NGUYÊN) ====================
+# ==================== QUẢN LÝ ĐOẠN CHAT ====================
 def get_chat_file(chat_name):
     safe_name = "".join(c for c in chat_name if c.isalnum() or c in "._-")
     if not safe_name:
@@ -286,7 +257,6 @@ def show_history():
 # ==================== GỌI GEMINI API ====================
 def call_gemini(api_key, messages, model_id):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
-    
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
@@ -314,7 +284,6 @@ def call_gemini(api_key, messages, model_id):
 # ==================== MAIN CHAT LOOP ====================
 def chat_loop(chat_name, api_key, model_id):
     messages = load_chat(chat_name)
-    
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"{Fore.MAGENTA}💬 Đang chat: {Fore.WHITE}{chat_name}")
     print(f"{Fore.BLUE}📡 Model: {Fore.YELLOW}{model_id}")
@@ -337,12 +306,10 @@ def chat_loop(chat_name, api_key, model_id):
             
             cmd = user_input.lower()
             if cmd in ["/menu", "/back"]:
-                print(f"{Fore.YELLOW}🔙 Quay lại menu chính...{Style.RESET_ALL}")
                 update_history(chat_name)
                 return "menu"
             elif cmd == "/new":
                 update_history(chat_name)
-                print(f"{Fore.YELLOW}✨ Tạo đoạn chat mới...{Style.RESET_ALL}")
                 return "new"
             elif cmd == "/delete":
                 if delete_chat(chat_name):
@@ -361,7 +328,6 @@ def chat_loop(chat_name, api_key, model_id):
                     print(f"{Fore.GREEN}✅ Đã đổi model, hãy tiếp tục chat.{Style.RESET_ALL}")
                 continue
             elif cmd == "/quit":
-                print(f"{Fore.YELLOW}👋 Tạm biệt!{Style.RESET_ALL}")
                 update_history(chat_name)
                 return "quit"
             else:
@@ -382,7 +348,6 @@ def main_menu():
     init_dirs()
     api_key = get_api_key()
     if not api_key:
-        print(f"{Fore.RED}❌ Không có API key, thoát chương trình{Style.RESET_ALL}")
         return
     
     config = load_config()
@@ -396,7 +361,7 @@ def main_menu():
         print(f"{Fore.GREEN}1. {Fore.WHITE}Tiếp tục chat: {Fore.YELLOW}{current_chat}")
         print(f"{Fore.GREEN}2. {Fore.WHITE}Chọn / Tạo đoạn chat khác")
         print(f"{Fore.GREEN}3. {Fore.WHITE}Xem lịch sử các đoạn chat")
-        print(f"{Fore.GREEN}4. {Fore.WHITE}Chọn Model Gemini (tự động cập nhật từ Google)")
+        print(f"{Fore.GREEN}4. {Fore.WHITE}Chọn Model Gemini (tự động cập nhật)")
         print(f"{Fore.GREEN}5. {Fore.WHITE}Đổi API key")
         print(f"{Fore.GREEN}6. {Fore.WHITE}Thoát")
         print(f"{Fore.CYAN}{'='*60}")
@@ -406,7 +371,7 @@ def main_menu():
         if choice == "1":
             result = chat_loop(current_chat, api_key, current_model)
             if result == "new":
-                new_name = input(f"{Fore.GREEN}Tên đoạn chat mới (để trống = datetime): {Style.RESET_ALL}").strip()
+                new_name = input(f"{Fore.GREEN}Tên mới (Enter = datetime): {Style.RESET_ALL}").strip()
                 if not new_name:
                     new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                 current_chat = new_name
@@ -415,10 +380,7 @@ def main_menu():
                 save_config(config)
             elif result == "deleted":
                 chats = list_chats()
-                if chats:
-                    current_chat = chats[0]["name"]
-                else:
-                    current_chat = datetime.now().strftime("%Y%m%d_%H%M%S")
+                current_chat = chats[0]["name"] if chats else datetime.now().strftime("%Y%m%d_%H%M%S")
                 config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
@@ -427,8 +389,8 @@ def main_menu():
         elif choice == "2":
             chats = list_chats()
             if not chats:
-                print(f"{Fore.YELLOW}📭 Chưa có đoạn chat nào, tạo mới ngay{Style.RESET_ALL}")
-                new_name = input(f"{Fore.GREEN}Tên đoạn chat mới: {Style.RESET_ALL}").strip()
+                print(f"{Fore.YELLOW}📭 Chưa có chat, tạo mới.{Style.RESET_ALL}")
+                new_name = input(f"{Fore.GREEN}Tên mới: {Style.RESET_ALL}").strip()
                 if not new_name:
                     new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                 current_chat = new_name
@@ -436,54 +398,48 @@ def main_menu():
                 config["current_chat"] = current_chat
                 save_config(config)
                 continue
-            print(f"\n{Fore.CYAN}📋 Các đoạn chat hiện có:{Style.RESET_ALL}")
-            for i, chat in enumerate(chats, 1):
-                print(f"  {Fore.GREEN}{i}. {Fore.WHITE}{chat['name']} {Fore.BLUE}({chat['msg_count']} tin nhắn)")
-            print(f"  {Fore.GREEN}0. {Fore.WHITE}Tạo đoạn chat mới")
+            print(f"\n{Fore.CYAN}📋 Các đoạn chat:{Style.RESET_ALL}")
+            for i, c in enumerate(chats, 1):
+                print(f"  {Fore.GREEN}{i}. {Fore.WHITE}{c['name']} ({c['msg_count']} tin nhắn)")
+            print(f"  {Fore.GREEN}0. {Fore.WHITE}Tạo mới")
             try:
-                sel = int(input(f"\n{Fore.YELLOW}Chọn số: {Style.RESET_ALL}"))
+                sel = int(input(f"{Fore.YELLOW}Chọn số: {Style.RESET_ALL}"))
                 if sel == 0:
-                    new_name = input(f"{Fore.GREEN}Tên đoạn chat mới: {Style.RESET_ALL}").strip()
+                    new_name = input(f"{Fore.GREEN}Tên mới: {Style.RESET_ALL}").strip()
                     if not new_name:
                         new_name = datetime.now().strftime("%Y%m%d_%H%M%S")
                     current_chat = new_name
                 elif 1 <= sel <= len(chats):
                     current_chat = chats[sel-1]["name"]
                 else:
-                    print(f"{Fore.RED}Lựa chọn không hợp lệ{Style.RESET_ALL}")
                     continue
                 config = load_config()
                 config["current_chat"] = current_chat
                 save_config(config)
-                print(f"{Fore.GREEN}✅ Đã chuyển sang '{current_chat}'{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}✅ Đã chọn '{current_chat}'{Style.RESET_ALL}")
             except ValueError:
-                print(f"{Fore.RED}Vui lòng nhập số{Style.RESET_ALL}")
+                print(f"{Fore.RED}Nhập số{Style.RESET_ALL}")
         elif choice == "3":
             show_history()
         elif choice == "4":
             current_model = choose_model(api_key)
         elif choice == "5":
-            new_key = input(f"{Fore.GREEN}Nhập API key mới: {Style.RESET_ALL}").strip()
+            new_key = input(f"{Fore.GREEN}API key mới: {Style.RESET_ALL}").strip()
             if new_key:
                 config = load_config()
                 config["api_key"] = new_key
                 save_config(config)
                 api_key = new_key
-                print(f"{Fore.GREEN}✅ Đã cập nhật API key{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}API key không hợp lệ{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}✅ Đã cập nhật{Style.RESET_ALL}")
         elif choice == "6":
             print(f"{Fore.YELLOW}👋 Tạm biệt!{Style.RESET_ALL}")
             break
-        else:
-            print(f"{Fore.RED}Lựa chọn không hợp lệ, vui lòng chọn 1-6{Style.RESET_ALL}")
 
-# ==================== CHẠY CHƯƠNG TRÌNH ====================
 if __name__ == "__main__":
     try:
         main_menu()
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}👋 Tạm biệt!{Style.RESET_ALL}")
     except Exception as e:
-        print(f"{Fore.RED}Lỗi không mong muốn: {e}{Style.RESET_ALL}")
+        print(f"{Fore.RED}Lỗi: {e}{Style.RESET_ALL}")
         sys.exit(1)
