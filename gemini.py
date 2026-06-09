@@ -105,7 +105,7 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Invalid choice, keeping current language.",
-        "thinking": "🤔 Thinking...",
+        "thinking": "Thinking...",
     },
     "vi": {
         "data_dir": "📁 Dữ liệu lưu tại: {}",
@@ -180,7 +180,7 @@ TEXTS = {
         "lang_changed_en": "✅ Language changed to English.",
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
-        "thinking": "🤔 Đang suy nghĩ...",
+        "thinking": "Đang suy nghĩ...",
     }
 }
 
