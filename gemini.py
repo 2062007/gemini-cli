@@ -22,7 +22,6 @@ from colorama import init, Fore, Style, Back
 
 init(autoreset=True)
 
-# ==================== CẤU HÌNH ĐƯỜNG DẪN ====================
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "gemini_data"
 CONFIG_FILE = DATA_DIR / "config.json"
@@ -34,10 +33,10 @@ CODES_DIR = DATA_DIR / "generated_code"
 DEFAULT_MODEL_ID = "gemini-2.0-flash"
 CODE_TIMEOUT = 30
 
-# ==================== CẤU HÌNH RUNTIME MỞ RỘNG ====================
 LANGUAGE_RUNTIMES = {
     "python": {"ext": "py", "run": ["python3", "{file}"]},
     "python3": {"ext": "py", "run": ["python3", "{file}"]},
+    "py": {"ext": "py", "run": ["python3", "{file}"]},
     "javascript": {"ext": "js", "run": ["node", "{file}"]},
     "js": {"ext": "js", "run": ["node", "{file}"]},
     "node": {"ext": "js", "run": ["node", "{file}"]},
@@ -65,7 +64,6 @@ LANGUAGE_RUNTIMES = {
     "sqlite": {"ext": "sql", "run": ["sqlite3", "{file}"]},
 }
 
-# ==================== TỪ ĐIỂN ĐA NGÔN NGỮ ====================
 TEXTS = {
     "en": {
         "data_dir": "📁 Data saved at: {}",
@@ -139,7 +137,6 @@ TEXTS = {
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Invalid choice, keeping current language.",
         "thinking": "Thinking...",
-        # Code
         "code_help": "Usage: /code <language> <description>\nExample: /code python Calculate factorial of 5",
         "code_generating": "📝 Generating {} code for: {}...",
         "code_generated": "✅ Generated code:",
@@ -155,7 +152,6 @@ TEXTS = {
         "code_name_prompt": "Name for this code (Enter = auto): ",
         "code_saved": "💾 Code saved as '{}'",
         "code_name_exists": "⚠️  A code named '{}' already exists. Overwrite? (y/N): ",
-        # Saved codes menu
         "saved_codes_title": "📚 SAVED CODES",
         "no_saved_codes": "📭 No saved codes yet.",
         "list_codes_item": "  {}. {} ({})",
@@ -239,7 +235,6 @@ TEXTS = {
         "lang_changed_vi": "✅ Đã chuyển sang Tiếng Việt.",
         "lang_invalid": "❌ Lựa chọn không hợp lệ, giữ ngôn ngữ hiện tại.",
         "thinking": "Đang suy nghĩ...",
-        # Code
         "code_help": "Cách dùng:\n  /code <ngôn ngữ> <mô tả>\nVí dụ: /code python Tính giai thừa của 5",
         "code_generating": "📝 Đang tạo code {} cho yêu cầu: {}...",
         "code_generated": "✅ Code đã tạo:",
@@ -255,7 +250,6 @@ TEXTS = {
         "code_name_prompt": "Tên cho code này (Enter = tự đặt): ",
         "code_saved": "💾 Đã lưu code với tên '{}'",
         "code_name_exists": "⚠️  Code tên '{}' đã tồn tại. Ghi đè? (y/N): ",
-        # Saved codes menu
         "saved_codes_title": "📚 CODE ĐÃ LƯU",
         "no_saved_codes": "📭 Chưa có code nào được lưu.",
         "list_codes_item": "  {}. {} ({})",
@@ -269,7 +263,6 @@ TEXTS = {
     }
 }
 
-# ==================== TIỆN ÍCH HIỂN THỊ ====================
 def print_box(text: str, color=Fore.CYAN, width=60):
     print(f"{color}╔{'═'*width}╗")
     for line in text.splitlines():
@@ -288,7 +281,6 @@ def loading_animation(stop_event, prefix="Thinking"):
         time.sleep(0.1)
     sys.stdout.write("\r" + " "* (len(prefix)+2) + "\r")
 
-# ==================== LỚP CHATBOT CHÍNH ====================
 class GeminiChatbot:
     def __init__(self):
         self.lang = "vi"
@@ -309,7 +301,6 @@ class GeminiChatbot:
             return text.format(*args)
         return text
 
-    # ==================== QUẢN LÝ CẤU HÌNH ====================
     def load_config(self):
         if CONFIG_FILE.exists():
             self.config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
@@ -586,7 +577,6 @@ class GeminiChatbot:
             t.join(timeout=1)
             return f"{Fore.RED}❌ Error: {e}{Style.RESET_ALL}"
 
-    # ==================== CODE: KHÔNG GIỚI HẠN NGÔN NGỮ ====================
     def get_language_runtime(self, lang: str) -> Optional[dict]:
         lang = lang.lower().strip()
         if lang in LANGUAGE_RUNTIMES:
@@ -637,8 +627,6 @@ class GeminiChatbot:
         ext = rt.get("ext", language)
         compile_cmd = rt.get("compile")
         run_cmd = rt.get("run")
-        if not run_cmd:
-            return "❌ No run command defined."
         if not run_cmd:
             return "❌ No run command defined."
         runtime_exe = run_cmd[0]
@@ -811,10 +799,25 @@ class GeminiChatbot:
                     self.run_saved_code(codes[idx-1]['path'])
                 else:
                     print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
+            elif ' ' in choice and choice.split()[0] in ('r', 'd'):
+                parts = choice.split()
+                action = parts[0]
+                num = parts[1] if len(parts) > 1 else ''
+                if num.isdigit() and 1 <= int(num) <= len(codes):
+                    if action == 'r':
+                        self.run_saved_code(codes[int(num)-1]['path'])
+                    elif action == 'd':
+                        c = codes[int(num)-1]
+                        self.delete_saved_code(c['path'], c['name'])
+                        codes = self.list_saved_codes()
+                        if not codes:
+                            print(f"{Fore.YELLOW}{self.t('no_saved_codes')}{Style.RESET_ALL}")
+                            break
+                else:
+                    print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
             else:
                 print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
 
-    # ==================== CHAT LOOP ====================
     def chat_loop(self):
         messages = self.load_messages(self.current_chat)
         print(f"\n{Fore.CYAN}{'='*60}")
@@ -875,7 +878,6 @@ class GeminiChatbot:
                 self.update_history(self.current_chat)
                 return "quit"
 
-    # ==================== MAIN MENU ====================
     def main_menu(self):
         self.load_config()
         self.initial_language_setup()
@@ -974,7 +976,6 @@ class GeminiChatbot:
             else:
                 print(f"{Fore.RED}{self.t('invalid_choice')}{Style.RESET_ALL}")
 
-# ==================== ĐIỂM KHỞI ĐẦU ====================
 if __name__ == "__main__":
     try:
         bot = GeminiChatbot()
